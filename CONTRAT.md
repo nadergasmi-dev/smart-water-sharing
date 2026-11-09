@@ -1,9 +1,29 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 1.0** — à valider par Binôme 1 et Binôme 2.
+**Version 2.0** — répartition des tâches rééquilibrée. À valider par Binôme 1 et Binôme 2.
 Toute modification de ce fichier doit être annoncée à l'autre binôme et commitée avec un message explicite.
 
 Ce document fixe les conventions de communication entre les modules. Il ne contient aucun algorithme : il définit comment les parties de code se parlent, pour que chacun puisse développer en parallèle.
+
+---
+
+## 0. Répartition des responsabilités
+
+Le responsable d'un module écrit son code et ses tests unitaires. L'autre binôme ne le modifie qu'après accord.
+
+| Binôme 1 | Binôme 2 |
+|----------|----------|
+| MQTT et communication (`NodeMqttClient`, `Message`, `MessageHandler`) | Horloge de Lamport (`LamportClock`) |
+| Blockchain privée et réplication (`Block`, `Blockchain`, `HashValidator`, `LedgerReplicator`) | Ricart-Agrawala (`RicartAgrawala`) |
+| Chandy-Lamport (`ChandyLamport`, `SnapshotService`, `GlobalSnapshot`) | Simulation des agriculteurs (`FarmerNode`, `SoilSimulator`) |
+| Dashboard : panneaux registre et snapshot | Allocation et pompe (`WaterAllocator`, `PumpResource`) |
+| | Dashboard : fenêtre principale, panneaux agriculteurs, quotas, réservoir, pompe |
+
+**Commun :** ce contrat, l'intégration, les tests de bout en bout, le rapport (chacun rédige les sections de ses modules) et la démonstration.
+
+**Changements par rapport à la version 1 :** Chandy-Lamport passe à Binôme 1 (il enregistre les messages en transit dans la couche de réception, qui est la sienne) ; l'horloge de Lamport passe à Binôme 2 (petit module, utilisé en permanence par Ricart-Agrawala) ; la simulation, l'allocation et la pompe deviennent des responsabilités de Binôme 2 ; le dashboard est découpé par panneaux.
+
+**Ordre de livraison :** Binôme 2 livre `LamportClock` en premier (semaine 1, jours 1 et 2) car `NodeMqttClient` en dépend.
 
 ---
 
@@ -65,7 +85,7 @@ Tous les messages ont la même enveloppe :
 
 ## 4. Les 6 types de messages
 
-### 4.1 Famille accès à la pompe (Ricart-Agrawala) — logique : Binôme 2
+### 4.1 Famille accès à la pompe (Ricart-Agrawala) — logique : Binôme 2, transport : Binôme 1
 
 | Type | Sens | Topic | Payload |
 |------|------|-------|---------|
@@ -83,7 +103,7 @@ Tous les messages ont la même enveloppe :
 - À la sortie : envoyer tous les `REPLY` différés.
 - `RELEASE` est une **notification** (le dashboard affiche « pompe libre »). Elle ne remplace pas les `REPLY` différés.
 
-### 4.2 Famille registre (blockchain) — logique : Binôme 1
+### 4.2 Famille registre (blockchain) — logique et transport : Binôme 1
 
 | Type | Sens | Topic | Payload |
 |------|------|-------|---------|
@@ -94,7 +114,7 @@ Tous les messages ont la même enveloppe :
 - `LEDGER_UPDATE` : le récepteur recalcule le hash, vérifie `previousHash` par rapport à **son** dernier bloc, puis ajoute le bloc. Sinon il signale une **divergence**.
 - Seul le nœud qui tient la pompe crée un bloc, donc il n'y a pas de bloc concurrent de même index.
 
-### 4.3 Famille snapshot (Chandy-Lamport) — logique : Binôme 2
+### 4.3 Famille snapshot (Chandy-Lamport) — logique et transport : Binôme 1
 
 | Type | Sens | Topic | Payload |
 |------|------|-------|---------|
@@ -103,12 +123,14 @@ Tous les messages ont la même enveloppe :
 - Premier `MARKER` reçu pour un `snapshotId` : enregistrer l'état local, renvoyer un `MARKER` aux autres, commencer à enregistrer les canaux entrants.
 - `MARKER` suivants : arrêter l'enregistrement du canal d'où il vient.
 - Snapshot local terminé quand un `MARKER` a été reçu de chaque autre nœud.
+- **Enregistrement des canaux :** pendant un snapshot, `MessageHandler` (Binôme 1) transmet chaque message reçu à `SnapshotService.onMessage(m)` **avant** de l'envoyer au module concerné. Si le canal d'où vient le message est en cours d'enregistrement, le message est ajouté à l'état du canal, puis traité normalement.
+- **État local :** `ChandyLamport` obtient l'état du nœud (humidité, quota, état de la pompe) via `LocalStateProvider` (section 7), implémenté par Binôme 2, et lit lui-même le registre.
 
 ---
 
 ## 5. Horloge de Lamport
 
-- Chaque nœud a **une** `LamportClock`, initialisée à `0`.
+- Chaque nœud a **une** `LamportClock` (écrite par Binôme 2), initialisée à `0`, passée au constructeur de `NodeMqttClient`.
 - **À l'envoi** : `tick()` (compteur + 1), et la valeur obtenue est écrite dans `lamport`.
 - **À la réception** : `update(m.lamport)` donne `max(local, reçu) + 1`, avant tout traitement du message.
 - Qui appelle quoi :
@@ -168,7 +190,7 @@ public interface MessageListener {
     void onMessage(Message m);
 }
 
-// algorithms
+// algorithms (Binôme 2)
 public class LamportClock {
     public synchronized int tick();
     public synchronized int update(int received);
@@ -176,6 +198,9 @@ public class LamportClock {
     /** Négatif si (tsA, idA) est prioritaire sur (tsB, idB). */
     public static int compare(int tsA, String idA, int tsB, String idB);
 }
+
+// communication (Binôme 1) : constructeur
+// public NodeMqttClient(String nodeId, LamportClock clock)
 
 // irrigation (Binôme 2 fournit, Binôme 1 utilise)
 public interface PumpAccess {
@@ -190,9 +215,17 @@ public interface Ledger {
     List<Block> getChain();
 }
 
-// snapshot (Binôme 2 fournit)
+// node (Binôme 2 fournit, Binôme 1 utilise pour Chandy-Lamport)
+public interface LocalStateProvider {
+    /** Copie cohérente de l'état local : humidité, quota restant, état de la pompe
+     *  (RELEASED / WANTED / HELD), demandes différées. */
+    LocalState getLocalState();
+}
+
+// snapshot (Binôme 1 fournit)
 public interface SnapshotService {
     void startSnapshot();             // initiateur
+    void onMessage(Message m);        // appelé par MessageHandler pour enregistrer les canaux
     boolean isComplete();
     GlobalSnapshot getResult();
 }
@@ -244,9 +277,9 @@ Valeurs initiales proposées (à confirmer) : réservoir = 1000 L, quota par agr
 
 - [ ] Rôle exact de `RELEASE` : simple notification (proposé) ou libération explicite.
 - [ ] Rattrapage d'un nœud en retard sur le registre : message `LEDGER_REQUEST` / `LEDGER_SYNC` à ajouter, ou ignoré pour ce projet.
-- [ ] Ordre entre topics : accepter l'hypothèse FIFO (section 10), ou faire publier chaque nœud sur un topic unique `water/from/{id}` filtré sur `to`.
+- [ ] Ordre entre topics (décision de Binôme 1, car il possède le transport et Chandy-Lamport) : accepter l'hypothèse FIFO (section 10), ou faire publier chaque nœud sur un topic unique `water/from/{id}` filtré sur `to`.
 - [ ] Valeurs initiales du réservoir, des quotas et seuil d'humidité.
-- [ ] Format et contenu de `GlobalSnapshot`.
+- [ ] Contenu de `LocalState` (Binôme 2 propose, Binôme 1 valide) et format de `GlobalSnapshot` (Binôme 1 propose, Binôme 2 valide).
 
 ---
 
