@@ -1,6 +1,11 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.2** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2). À valider par Binôme 1 et Binôme 2.
+**Version 3.3** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3). À valider par Binôme 1 et Binôme 2.
+
+**Changements de la version 3.3 par rapport à la 3.2 (Chandy-Lamport) :**
+- Nouveau type `SNAPSHOT_STATE` (section 4.3) : chaque nœud diffuse son instantané local une fois terminé, pour que chacun (et le dashboard) puisse assembler l'état global. On passe de 8 à 9 types.
+- Format de `GlobalSnapshot` / `LocalSnapshot` proposé par Binôme 1, et **proposition** de contenu pour `LocalState` (à valider par Binôme 2), section 7.
+- Le déclenchement se fait **depuis un nœud** (le dashboard est en lecture seule) ; `MessageHandler.execute(Runnable)` permet de démarrer le snapshot entre deux messages.
 
 **Changements de la version 3.2 par rapport à la 3.1 (réplication) :**
 - Deux nouveaux types de messages, `LEDGER_REQUEST` et `LEDGER_SYNC` (section 4.2) : un nœud en retard récupère les blocs manquants, chacun **revalidé par les 7 règles** avant d'être ajouté. On passe de 6 à 8 types.
@@ -161,7 +166,7 @@ Tous les messages ont la même enveloppe :
 | Champ | Type | Description |
 |-------|------|-------------|
 | `msgId` | String (UUID) | Identifiant unique du message, sert à dédupliquer (et à refuser un message rejoué) |
-| `type` | String | L'un des 8 types de la section 4 |
+| `type` | String | L'un des 9 types de la section 4 |
 | `from` | String | ID de l'expéditeur (`A`, `B`, `C`). Doit être égal à l'expéditeur du topic `water/from/{id}`, sinon le message est jeté (section 2) |
 | `to` | String | ID du destinataire, ou `ALL` pour une diffusion. Un nœud ignore les messages qui ne lui sont pas destinés |
 | `lamport` | int | Timestamp logique de l'envoi (voir section 5) |
@@ -169,7 +174,7 @@ Tous les messages ont la même enveloppe :
 
 ---
 
-## 4. Les 8 types de messages
+## 4. Les 9 types de messages
 
 La sécurisation n'ajoute **aucun** type de message.
 
@@ -215,11 +220,16 @@ Tous les messages sont publiés sur le topic de leur expéditeur, `water/from/{f
 
 | Type | Sens | `to` | Payload |
 |------|------|------|---------|
-| `MARKER` | « Enregistre ton état » | `ALL` | `{ "snapshotId": "S1", "initiator": "A" }` |
+| `MARKER` | « Enregistre ton état » | `ALL` | `{ "snapshotId": "A-1", "initiator": "A" }` |
+| `SNAPSHOT_STATE` | « Voici mon instantané local » | `ALL` | `{ "snapshotId": "A-1", "initiator": "A", "local": { LocalSnapshot, section 7 } }` |
 
-- Premier `MARKER` reçu pour un `snapshotId` : enregistrer l'état local, renvoyer un `MARKER` aux autres, commencer à enregistrer les canaux entrants.
+- **Déclenchement :** depuis un **nœud** (`startSnapshot()`), jamais depuis le dashboard, qui ne peut rien publier. `snapshotId` = initiateur + numéro (`A-1`, `A-2`…). **Un seul snapshot à la fois** : un `MARKER` d'un autre snapshot reçu pendant qu'un snapshot est en cours est ignoré.
+- Premier `MARKER` reçu pour un `snapshotId` : enregistrer l'état local, renvoyer un `MARKER` aux autres, commencer à enregistrer les canaux entrants (sauf celui d'où vient ce `MARKER`, vide par définition).
+- **Enregistrer l'état et envoyer le `MARKER` se fait d'un seul bloc** : aucun autre message du nœud ne peut partir entre les deux.
 - `MARKER` suivants : arrêter l'enregistrement du canal d'où il vient.
-- Snapshot local terminé quand un `MARKER` a été reçu de chaque autre nœud.
+- Snapshot local terminé quand un `MARKER` a été reçu de chaque autre nœud. Le nœud diffuse alors `SNAPSHOT_STATE`. L'**état global est complet** quand les instantanés locaux de A, B et C sont connus.
+- `SNAPSHOT_STATE` publié au nom d'un autre nœud (`local.nodeId` ≠ expéditeur) : ignoré.
+- **Canaux FIFO :** garantis par un topic par expéditeur (section 2) ; `MARKER` et `SNAPSHOT_STATE` ne sont jamais enregistrés comme messages en transit.
 - **Enregistrement des canaux :** pendant un snapshot, `MessageHandler` (Binôme 1) transmet chaque message reçu à `SnapshotService.onMessage(m)` **avant** de l'envoyer au module concerné. Si le canal d'où vient le message est en cours d'enregistrement, le message est ajouté à l'état du canal, puis traité normalement.
 - **État local :** `ChandyLamport` obtient l'état du nœud (humidité, quota, état de la pompe) via `LocalStateProvider` (section 7), implémenté par Binôme 2, et lit lui-même le registre.
 
@@ -393,18 +403,33 @@ public class LedgerReplicator implements MessageListener {
 
 // node (Binôme 2 fournit, Binôme 1 utilise pour Chandy-Lamport)
 public interface LocalStateProvider {
-    /** Copie cohérente de l'état local : humidité, quota restant, état de la pompe
-     *  (RELEASED / WANTED / HELD), demandes différées. */
+    /** Copie cohérente de l'état local ; appelée sur le thread du MessageHandler, entre deux messages. */
     LocalState getLocalState();
 }
+// PROPOSITION de Binôme 1, à valider par Binôme 2 (qui peut ajouter des champs) :
+public record LocalState(String nodeId, double humidity, int quotaRemaining,
+                         String pumpState,               // "RELEASED" | "WANTED" | "HELD"
+                         List<String> deferredReplies) { } // nœuds dont le REPLY est différé
 
 // snapshot (Binôme 1 fournit)
 public interface SnapshotService {
-    void startSnapshot();             // initiateur
-    void onMessage(Message m);        // appelé par MessageHandler pour enregistrer les canaux
-    boolean isComplete();
-    GlobalSnapshot getResult();
+    void startSnapshot();             // initiateur (un nœud)
+    void onMessage(Message m);        // appelé par MessageHandler pour CHAQUE message, avant le module
+    boolean isComplete();             // instantanés locaux de A, B et C connus
+    GlobalSnapshot getResult();       // null si aucun snapshot
 }
+public record LocalSnapshot(String nodeId, LocalState state, int ledgerLength, String ledgerLastHash,
+                            Map<String, List<Message>> channels,   // expéditeur -> messages en transit
+                            long recordedAt) { }
+public record GlobalSnapshot(String snapshotId, String initiator, Map<String, LocalSnapshot> nodes,
+                             List<String> expectedNodes) {
+    boolean isComplete();  List<Message> messagesInTransit();  boolean sameLedgerEverywhere();
+}
+// Implémentation : algorithms/ChandyLamport
+//   nœud      : new ChandyLamport(id, stateProvider, ledger, mqttClient, handler::execute);
+//               handler.setSnapshotService(cl);
+//   dashboard : ChandyLamport.observer(), alimenté avec les SNAPSHOT_STATE lus sur water/from/+ (ne déclenche pas).
+// MessageHandler.execute(Runnable) : exécute une tâche sur son thread, entre deux messages.
 ```
 
 - `Block` est **immuable** : champs `private final`, aucun setter.
@@ -463,7 +488,7 @@ attribué = min(besoin, quotaRestant, réservoirDisponible)
 - [x] ~~Ordre entre topics~~ → **décidé en v3.1 (Binôme 1)** : un topic unique par expéditeur `water/from/{id}`, destinataire filtré sur `to` à la réception. L'ACL (règles par nom d'utilisateur) interdit d'écrire sous le nom d'un autre : le champ `from` ne peut plus être usurpé et l'ordre d'un même expéditeur est préservé.
 - [ ] TLS sur le broker (port 8883) : activé ou laissé hors périmètre (tout tourne en local).
 - [ ] Seuil d'humidité.
-- [ ] Contenu de `LocalState` (Binôme 2 propose, Binôme 1 valide) et format de `GlobalSnapshot` (Binôme 1 propose, Binôme 2 valide).
+- [ ] Contenu de `LocalState` et format de `GlobalSnapshot` : **proposés par Binôme 1 en v3.3** (section 7), à valider par Binôme 2 (qui peut ajouter des champs à `LocalState`).
 
 ---
 

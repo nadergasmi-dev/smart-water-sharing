@@ -74,7 +74,11 @@ public class MessageHandler implements Consumer<Message> {
             l = listeners.get(m.getType());
         }
         if (l == null) {
-            System.out.println("[" + nodeId + "] aucun module pour " + m.getType() + " (ignoré)");
+            boolean handledBySnapshot = s != null
+                    && (m.getType() == MessageType.MARKER || m.getType() == MessageType.SNAPSHOT_STATE);
+            if (!handledBySnapshot) {
+                System.out.println("[" + nodeId + "] aucun module pour " + m.getType() + " (ignoré)");
+            }
             return;
         }
         try {
@@ -82,6 +86,14 @@ public class MessageHandler implements Consumer<Message> {
         } catch (Exception e) {
             System.err.println("[" + nodeId + "] erreur dans le module " + m.getType() + " : " + e.getMessage());
         }
+    }
+
+    /**
+     * Exécute une tâche sur le thread du handler, ENTRE deux messages (jamais au milieu du traitement
+     * d'un message). Utilisé par Chandy-Lamport pour démarrer un snapshot sur un état cohérent.
+     */
+    public void execute(Runnable task) {
+        executor.execute(task);
     }
 
     public void shutdown() {

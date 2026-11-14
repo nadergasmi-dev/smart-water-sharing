@@ -1,18 +1,19 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
 package com.smartwater.snapshot;
 
-/**
- *
- * @author nader
- */
 import com.smartwater.communication.Message;
 
+/** Snapshot global (Chandy-Lamport), contrat section 7. Implémenté par {@code ChandyLamport}. */
 public interface SnapshotService {
-    void startSnapshot();             // initiateur
-    void onMessage(Message m);        // appelé par MessageHandler pour enregistrer les canaux
+
+    /** Déclenche un snapshot depuis ce nœud (initiateur). */
+    void startSnapshot();
+
+    /** Appelé par MessageHandler pour CHAQUE message reçu, avant le module concerné. */
+    void onMessage(Message m);
+
+    /** true quand l'instantané local de chaque nœud est connu (état global complet). */
     boolean isComplete();
-    // GlobalSnapshot getResult();    // à ajouter en partie 4, quand GlobalSnapshot existera
+
+    /** Dernier état global connu (complet ou en cours) ; null si aucun snapshot n'a eu lieu. */
+    GlobalSnapshot getResult();
 }
