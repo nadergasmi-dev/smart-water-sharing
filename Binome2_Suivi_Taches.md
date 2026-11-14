@@ -104,31 +104,33 @@
   - [x] `allocation` : `(quota, reservoir) -> min(besoin, quota, reservoir)` (`WaterAllocator`) ; quota et réservoir sont recalculés depuis la chaîne
   - [x] `listener.onIrrigated(bloc)` : mettre à jour tes compteurs (quota, `PumpResource`) ; `onRefused(raison)` : log ; `onNothingAllocated()` : rien
 - [ ] Vérifier que le scénario fonctionne quand le broker authentifié est activé.
-- [ ] Scénario complet en console avec Binôme 1 (3 demandes quasi simultanées, avec le vrai Ricart-Agrawala).
+- [x] Scénario complet en console : `ScenarioDemo` (3 agriculteurs, vrai Ricart-Agrawala, snapshots, option `--triche`). Reste à le jouer avec Binôme 1 (3 demandes quasi simultanées, avec le vrai Ricart-Agrawala).
 
 **Test de validation :** scénario sans blocage, quotas corrects, accès pompe respecté, y compris avec le broker authentifié.
 
 ---
 
-## ⬜ Partie 7 : Dashboard JavaFX complet (semaines 3-4) — *toute la partie est à toi en v3*
+## ✅ Partie 7 : Dashboard JavaFX — FAIT (15/11/2026)
 
-- [ ] Fenêtre principale JavaFX.
-- [ ] Connexion MQTT avec le compte `DASHBOARD` (lecture seule, mot de passe via `Config.mqttPassword("DASHBOARD")`) :
-  - [ ] **v3.1 :** s'abonner à `water/from/+` (au lieu de `water/all`) : le dashboard reçoit ainsi tous les messages (`REQUEST`, `REPLY`, `RELEASE`, `MARKER`, `IRRIGATION_EVENT`, `LEDGER_UPDATE`, `LEDGER_REQUEST`, `LEDGER_SYNC`). L'expéditeur est le dernier segment du topic.
-  - [ ] Lancer `mosquitto/setup.ps1` chez toi pour créer les comptes et les mots de passe (non commités).
-- [ ] Panneau agriculteurs (humidité, demandes).
-- [ ] Panneau quotas.
-- [ ] Panneau réservoir.
-- [ ] Panneau pompe (état, utilisation).
-- [ ] **v3 — panneau registre** (repris de Binôme 1) :
-  - [ ] copie du registre via `Blockchain.observer()`, tenue à jour par un réplicateur passif fourni par Binôme 1 : `new LedgerReplicator("DASHBOARD", observer, null)`, auquel on passe les messages `LEDGER_UPDATE` / `LEDGER_REQUEST` / `LEDGER_SYNC` lus sur `water/from/+` (`replicator.onMessage(m)`)
-  - [ ] liste des blocs (index, agriculteur, litres, quota, hash)
-  - [ ] validité de la chaîne (`validate()`) et état de réplication : `replicator.getPeerHeads()` (longueur + dernier hash de chaque nœud), `getDivergences()` (blocs refusés, fourches, avec la raison)
-  - [ ] statut de la signature de chaque bloc (✓ / ✗)
-  - [ ] blocs refusés avec la raison (`getRejected()`, règles V1 à V7)
-- [ ] **v3 — panneau snapshot** (repris de Binôme 1) : affichage de `GlobalSnapshot` avec `ChandyLamport.observer()`, alimenté par les messages `SNAPSHOT_STATE` lus sur `water/from/+` (`getResult()` : état de chaque nœud, messages en transit, registres identiques ou non). **Le déclenchement se fait depuis un nœud** (le dashboard ne peut rien publier) : prévoir un déclencheur dans `FarmerNode` (commande console ou minuterie) qui appelle `startSnapshot()`.
+*Lancement : `mvn javafx:run` (ou `DashboardLauncher` depuis l'IDE). Options : `--keys=<dossier>`, `--broker=<url>`, `--capture=<fichier.png>` (capture pour le rapport). JavaFX 21.0.5 ajouté au `pom.xml`.*
 
-**⚠️ Dépend de :** `Blockchain.observer()`, `getRejected()` et `SnapshotService` (Binôme 1, semaine 3).
+- [x] `dashboard/DashboardMqttClient` : compte `DASHBOARD`, **lecture seule** (aucune méthode de publication), abonné à `water/from/+`. Contrairement au client des nœuds, il ne filtre pas sur `to` (il voit aussi les `REPLY` adressés à un seul nœud) ; il garde l'anti-usurpation (`from` ≠ topic → compté et jeté) et la déduplication. Mot de passe via `Config.mqttPassword("DASHBOARD")`, sinon connexion anonyme.
+- [x] `dashboard/DashboardModel` : toute la logique, **sans JavaFX** (testable) ; la fenêtre lit une copie immuable (`view()`) toutes les 400 ms.
+  - [x] **Pompe reconstituée depuis les messages** : après sa k-ième demande, un nœud est `WANTED`, puis `HELD` quand il a reçu k × 2 `REPLY`, puis `RELEASED` avec son k-ième `RELEASE`. Compter les totaux rend le calcul insensible à l'ordre entre topics (un `REPLY` de B à A peut arriver avant le `REQUEST` de A). Affiche qui tient la pompe, la file d'attente dans l'ordre `(lamport, id)`, et signale une violation de l'exclusion mutuelle.
+  - [x] **Registre** : `Blockchain.observer()` + `LedgerReplicator("DASHBOARD", observer, null)` (passif) ; blocs (index, heure, agriculteur, litres, quota, hash, hash précédent), ✓/✗ de signature (`BlockSigner.verify`, mis en cache), validité de la chaîne, copies connues des nœuds, divergences, **blocs refusés avec la règle violée**.
+  - [x] **Quotas et réservoir** recalculés depuis la copie du registre (la chaîne fait foi).
+  - [x] **Snapshot** : `ChandyLamport.observer()` alimenté par les `SNAPSHOT_STATE` ; tableau des états locaux (pompe, humidité, quota, REPLY différés, registre), messages en transit, registres identiques ou non. C'est aussi **la seule source de l'humidité** (aucun message ne la transporte).
+  - [x] Journal des 300 derniers messages, une phrase lisible par type.
+- [x] `dashboard/DashboardApp` : cartes agriculteurs (état de la pompe en couleur, humidité, quota, demandes, accès), réservoir, pompe ; onglets Registre / Snapshot / Journal ; barre d'état (connexion, messages, usurpations).
+- [x] Déclencheur de snapshot côté nœud : commande `s` de `FarmerNode`, et snapshots automatiques dans `ScenarioDemo`.
+- [x] `node/ScenarioDemo` : les 3 agriculteurs dans une console, snapshot régulier depuis A, option `--triche` (C diffuse un bloc à 500 L → V6, et un bloc modifié après signature → V1) pour la démo.
+- [ ] Vérifier avec le broker authentifié (`mosquitto/setup.ps1`).
+
+**Test de validation :** ✅ `DashboardModelTest` (8, sans broker) : pompe reconstituée (y compris `REPLY` avant `REQUEST`), violation d'exclusion détectée, quotas / réservoir / signatures, blocs falsifiés refusés (V6, V1), snapshot et humidité, journal, client (usurpation, doublon, `REPLY` adressé à un autre nœud). `DashboardOverMqttTest` (1, vrai broker) : 3 agriculteurs + dashboard → même chaîne que les nœuds, état de pompe reconstitué = état réel, 2 blocs de triche refusés, humidité connue via le snapshot.
+
+**Démo réelle (15/11/2026) :** `ScenarioDemo --triche` + dashboard, Mosquitto local : 3 agriculteurs jusqu'à épuisement des quotas (7 irrigations chacun, 21 blocs, réservoir 400 L), registres identiques, les 2 blocs de C refusés en direct (V6, V1), snapshots complets « registres identiques partout ». Captures : `docs/captures/dashboard_registre.png`, `docs/captures/dashboard_snapshot.png` (option `--tab=1 --capture=…`). `mvn test` : **155 tests, 0 échec** (stable sur 2 exécutions).
+
+**À noter :** lancer le dashboard **avant** les nœuds : le réplicateur passif ne demande jamais de rattrapage, il ne récupère les blocs manqués que lorsqu'un nœud en demande un (`LEDGER_SYNC` visible sur `water/from/+`).
 
 ---
 
