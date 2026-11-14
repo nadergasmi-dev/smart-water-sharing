@@ -41,10 +41,34 @@ public class NodeMqttClient implements MessageSender {
     // Rempli à l'étape 6 (MessageHandler)
     private volatile java.util.function.Consumer<Message> incomingHandler;
 
+    private final String brokerUrl;
+    /** Mot de passe MQTT du nœud ; null = connexion anonyme (broker non sécurisé). */
+    private final String password;
+
+    /**
+     * Se connecte à {@link Config#BROKER_URL} avec {@code username = nodeId} et le mot de passe de
+     * {@link Config#mqttPassword(String)}. Si aucun mot de passe n'est configuré, la connexion est
+     * anonyme : elle ne fonctionne que sur un broker non sécurisé.
+     */
     public NodeMqttClient(String nodeId, LamportClock clock) {
+        this(nodeId, clock, Config.BROKER_URL, configuredPasswordOrNull(nodeId));
+    }
+
+    /** Variante explicite (broker et mot de passe fournis) ; {@code password == null} = connexion anonyme. */
+    public NodeMqttClient(String nodeId, LamportClock clock, String brokerUrl, String password) {
         this.nodeId = nodeId;
         this.clock = clock;
         this.topicNode = TOPIC_NODE_PREFIX + nodeId;
+        this.brokerUrl = brokerUrl;
+        this.password = password;
+    }
+
+    private static String configuredPasswordOrNull(String nodeId) {
+        try {
+            return Config.mqttPassword(nodeId);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            return null;   // aucun mot de passe configuré
+        }
     }
 
     /** Branche le récepteur des messages (MessageHandler, étape 6). */
@@ -58,6 +82,8 @@ public class NodeMqttClient implements MessageSender {
             try {
                 connect();
                 return;
+            } catch (MqttSecurityException e) {
+                throw e;   // identifiants ou droits refusés : réessayer ne servirait à rien
             } catch (MqttException e) {
                 last = e;
                 System.err.println("[" + nodeId + "] connexion échouée (" + i + "/" + maxAttempts
@@ -86,9 +112,15 @@ public class NodeMqttClient implements MessageSender {
             if (client != null) {
             try { client.close(); } catch (Exception ignored) { }
         }
-        client = new MqttClient(Config.BROKER_URL, nodeId, new MemoryPersistence());
+        client = new MqttClient(brokerUrl, nodeId, new MemoryPersistence());
 
         MqttConnectOptions opts = new MqttConnectOptions();
+        if (password != null) {
+            opts.setUserName(nodeId);
+            opts.setPassword(password.toCharArray());
+        } else {
+            System.out.println("[" + nodeId + "] aucun mot de passe MQTT configuré : connexion anonyme");
+        }
         opts.setCleanSession(true);
         opts.setAutomaticReconnect(true);   // reconnexion : détaillée à l'étape 7
         opts.setConnectionTimeout(10);
@@ -121,7 +153,18 @@ public class NodeMqttClient implements MessageSender {
             public void deliveryComplete(IMqttDeliveryToken token) { }
         });
 
-        client.connect(opts);
+        try {
+            client.connect(opts);
+        } catch (MqttSecurityException e) {
+            System.err.println("[" + nodeId + "] connexion REFUSÉE par le broker (code " + e.getReasonCode() + ") : "
+                    + (password == null
+                        ? "connexion anonyme non autorisée, configurer le mot de passe de « " + nodeId
+                          + " » (variable SMARTWATER_MQTT_PASSWORD_" + nodeId
+                          + " ou config/mqtt-passwords.properties)"
+                        : "utilisateur « " + nodeId + " » ou mot de passe incorrect"
+                          + " (vérifier config/mqtt-passwords.properties et mosquitto/passwd)"));
+            throw e;
+        }
     }
 
     private void subscribeAll() throws MqttException {

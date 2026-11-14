@@ -1,0 +1,23 @@
+# Nœuds : diffusent sur water/all, envoient des REPLY à n'importe quel nœud,
+# mais ne lisent que water/all et LEUR propre topic.
+user A
+topic write water/all
+topic write water/node/#
+topic read  water/all
+topic read  water/node/A
+
+user B
+topic write water/all
+topic write water/node/#
+topic read  water/all
+topic read  water/node/B
+
+user C
+topic write water/all
+topic write water/node/#
+topic read  water/all
+topic read  water/node/C
+
+# Dashboard : lecture seule
+user DASHBOARD
+topic read water/all

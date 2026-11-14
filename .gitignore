@@ -5,3 +5,6 @@ keys/*.key
 
 # Mots de passe MQTT en clair (voir Config.mqttPassword) : jamais commités
 config/mqtt-passwords.properties
+
+# Comptes Mosquitto générés localement par mosquitto/setup.ps1 (mots de passe hachés propres à chaque machine)
+mosquitto/passwd
