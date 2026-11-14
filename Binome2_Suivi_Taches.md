@@ -49,21 +49,27 @@
 
 ---
 
-## ⬜ Partie 3 : Ricart-Agrawala (semaine 1-2)
+## ✅ Partie 3 : Ricart-Agrawala — FAITE (14/11/2026)
 
-- [ ] `RicartAgrawala.java` implémentant `PumpAccess` :
-  - [ ] `requestPump()` : diffuse `REQUEST` (via `MessageSender` de Binôme 1), bloque jusqu'à entrée en section critique.
-  - [ ] état `RELEASED` → répondre tout de suite à un `REQUEST` reçu.
-  - [ ] état `HELD` → différer la réponse.
-  - [ ] état `WANTED` → comparer priorités via `LamportClock.compare()` ; différer si ma demande est prioritaire, sinon répondre.
-  - [ ] entrée en section critique après réception d'un `REPLY` de **chaque** autre nœud (2 sur 3).
-  - [ ] `releasePump()` : envoie `RELEASE` **puis** les `REPLY` différés.
-- [ ] Implémente `MessageListener` pour recevoir `REQUEST`/`REPLY`.
-- [ ] Tests : 2-3 nœuds avec demandes concurrentes, vérifier l'ordre d'accès selon priorité.
+- [x] `algorithms/RicartAgrawala.java` implémentant `PumpAccess` (constructeur du contrat : `new RicartAgrawala(id, rt.clock(), rt.sender())`) :
+  - [x] `requestPump()` : diffuse `REQUEST` (via `MessageSender` de Binôme 1), bloque jusqu'à entrée en section critique. L'estampille de la demande est la valeur renvoyée par `publish()`.
+  - [x] état `RELEASED` → répondre tout de suite à un `REQUEST` reçu.
+  - [x] état `HELD` → différer la réponse.
+  - [x] état `WANTED` → comparer priorités via `LamportClock.compare()` ; différer si ma demande est prioritaire, sinon répondre.
+  - [x] entrée en section critique après réception d'un `REPLY` de **chaque** autre nœud (2 sur 3).
+  - [x] `releasePump()` : envoie `RELEASE` **puis** les `REPLY` différés (dans l'ordre d'arrivée).
+  - [x] Pas de réentrance : `requestPump()` en `WANTED`/`HELD` ou `releasePump()` sans la pompe → `IllegalStateException`.
+  - [x] Interruption pendant l'attente : demande abandonnée proprement (REPLY différés envoyés, retour à `RELEASED`) ; le `REPLY` tardif de l'ancienne demande est ignoré pour ne pas compter à tort pour la suivante.
+- [x] Implémente `MessageListener` (`REQUEST`, `REPLY`, `RELEASE`) : `rt.handler().register(ra, RicartAgrawala.TYPES)`. Messages d'un nœud inconnu ou `REPLY` inattendu : ignorés et loggés.
+- [x] **Ordre des verrous** : `synchronized (sender)` puis `synchronized (this)` pour toute action qui change l'état ET envoie un message. Indispensable car `ChandyLamport` prend le verrou du client MQTT puis lit l'état de la pompe : sinon, interblocage possible. Bonus : un snapshot ne s'intercale jamais entre un changement d'état et son message.
+- [x] `view()` : lecture atomique de l'état (état, estampille, REPLY différés, REPLY attendus) pour `LocalState` et le dashboard.
+- [x] Tests (11) :
+  - [x] `RicartAgrawalaTest` (9, sans broker) : règles de décision message par message (RELEASED / HELD / WANTED, égalité départagée par l'ID), ordre RELEASE puis REPLY, réentrance, messages inattendus, abandon sur interruption ; **réseau simulé** 3 nœuds avec délais aléatoires : 3 × 30 demandes concurrentes, jamais 2 nœuds en section critique ; ordre d'accès B avant C selon `(lamport, from)`. *Vérifié en désactivant le report des réponses : 5 tests échouent (3 nœuds en section critique en même temps).*
+  - [x] `RicartAgrawalaOverMqttTest` (2, vrai broker) : branché dans `IrrigationSequence` de Binôme 1 **à la place de la pompe simulée** : 3 nœuds × 3 irrigations simultanées → pompe exclusive, 3 registres identiques, aucune divergence ni bloc refusé, quotas 170 L, réservoir 910 L. Et **40 snapshots Chandy-Lamport pendant les irrigations** : aucun interblocage, au plus un nœud en `HELD` dans chaque état global (cohérence de la coupure).
 
-**⚠️ Dépend de :** `NodeMqttClient` + `Message` fonctionnels (Binôme 1, prévu fin semaine 1).
+**Test de validation :** ✅ demandes simultanées de A, B, C → accès exclusif respectant l'ordre `(lamport, from)` ; `mvn test` : 125 tests, 0 échec (stable sur 3 exécutions).
 
-**Test de validation :** demandes simultanées de A, B, C → accès exclusif respectant l'ordre `(lamport, from)`.
+**À noter pour le rapport :** la pompe simulée de Binôme 1 attendait que tous les nœuds aient reçu le bloc avant de libérer ; avec Ricart-Agrawala ce n'est plus nécessaire : l'ordre FIFO du topic `water/from/{id}` (`LEDGER_UPDATE` envoyé avant le `REPLY`) suffit, et le test le confirme.
 
 ---
 
