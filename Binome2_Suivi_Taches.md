@@ -38,14 +38,14 @@
 
 ---
 
-## ⬜ Partie 2 : Simulation des agriculteurs (semaine 1)
+## ✅ Partie 2 : Simulation des agriculteurs — FAITE (15/11/2026)
 
-- [ ] `FarmerNode.java` : nœud indépendant par agriculteur (A, B, C).
-- [ ] `SoilSimulator.java` : simulation de l'humidité du sol (baisse dans le temps).
-- [ ] `FarmerState.java` : quota initial par agriculteur (**`Config.QUOTA_INITIAL` = 200 L**, `Config` fourni par Binôme 1), seuil de déclenchement de la demande.
-- [ ] Génération de `REQUEST` quand humidité insuffisante **et** quota > 0 (sinon, pas de `REQUEST` — règle section 9 du contrat).
+- [x] `node/FarmerNode.java` : nœud indépendant par agriculteur (A, B, C), `implements LocalStateProvider` ; assemble `NodeRuntime` (Binôme 1), `RicartAgrawala`, le sol, l'état et la vue du réservoir. Boucle automatique (`startLoop(périodeMs)` / `stopLoop()` sans interruption au milieu d'une section critique), `step()` pour un cycle, `main` console (`FarmerNode A [périodeMs]`, commandes `s` snapshot, `e` état, `q` quitter).
+- [x] `node/SoilSimulator.java` : humidité 0–100 %, baisse de 3 ± 1,5 points par pas (aléa à graine fixe, reproductible), +1 point par litre ; `litersToReach(cible)` = besoin en eau.
+- [x] `node/FarmerState.java` : quota initial `Config.QUOTA_INITIAL` (200 L), **seuil 30 %**, **cible 60 %** (proposition pour le point ouvert « seuil d'humidité »), compteurs (demandes, irrigations, litres reçus, refus). Le quota est réaligné sur la chaîne (il ne peut que baisser).
+- [x] `REQUEST` seulement si humidité < seuil **et** quota > 0 (contrat, section 9) ; sinon aucun message (log une seule fois « quota épuisé »).
 
-**Test de validation :** 3 nœuds tournent indépendamment, humidité évolue, demandes générées au bon moment.
+**Test de validation :** ✅ `SoilSimulatorTest` (7), `FarmerStateTest` (6), `FarmerNodeOverMqttTest` (3, vrai broker) : demande exactement au pas où l'humidité passe **sous** 30 % (pas au seuil exact), besoin 35 L ; quota épuisé → plus de `REQUEST` ni de bloc ; 3 agriculteurs en boucle jusqu'à épuisement des quotas (600 L distribués). *Vérifié en retirant la condition de quota : 3 tests échouent.*
 
 ---
 
@@ -73,36 +73,36 @@
 
 ---
 
-## ⬜ Partie 4 : Allocation et pompe (semaine 2)
+## ✅ Partie 4 : Allocation et pompe — FAITE (15/11/2026)
 
-- [ ] `WaterAllocator.java` : `attribué = min(besoin, quotaRestant, réservoirDisponible)`, calculé **dans la section critique**.
-- [ ] `PumpResource.java` : représentation de la ressource partagée (réservoir initial **`Config.RESERVOIR_INITIAL` = 1000 L**, niveau).
-- [ ] Mise à jour des compteurs (quota, réservoir) **seulement après le succès de `Ledger.addBlock`** (v3).
-- [ ] Cas `attribué == 0` : pas d'irrigation, pas de bloc, mais `releasePump()` quand même appelé.
-- [ ] **v3 :** cas `InvalidBlockException` levée par `addBlock` : log de la raison, compteurs **non** modifiés, pas d'irrigation, `releasePump()` quand même appelé.
+- [x] `irrigation/WaterAllocator.java` : `attribué = min(besoin, quotaRestant, réservoirDisponible)` (jamais négatif), passé à `IrrigationSequence` via `WaterAllocator.forNeed(besoin)` : calculé **dans la section critique**, avec quota et réservoir recalculés depuis la chaîne.
+- [x] `irrigation/PumpResource.java` : vue locale du réservoir (1000 L), utilisation de la pompe par le nœud ; mis à jour après un bloc accepté ou à la réception d'un `IRRIGATION_EVENT` d'un autre nœud. Le niveau retenu est le plus bas annoncé (le réservoir ne remonte jamais, les événements de deux expéditeurs peuvent arriver dans le désordre).
+- [x] Compteurs (quota, réservoir, humidité) mis à jour **seulement dans `onIrrigated`**, donc après le succès de `addBlock`, sous le verrou du client MQTT (un snapshot ne voit jamais une irrigation à moitié comptée).
+- [x] `attribué == 0` → `NOTHING_ALLOCATED`, pas de bloc, pompe libérée (géré par `IrrigationSequence`).
+- [x] `InvalidBlockException` → `REFUSED`, seul le compteur de refus change, pompe libérée.
 
-**Test de validation :** allocation correcte selon besoin/quota/réservoir ; aucune double-attribution du même volume ; un bloc refusé ne modifie aucun compteur.
-
----
-
-## ⬜ Partie 5 : Interfaces fournies à Binôme 1
-
-- [ ] `LocalStateProvider` : **l'interface et le record `LocalState` existent déjà** (`node/`, proposés par Binôme 1 en v3.3 pour ne pas bloquer Chandy-Lamport). À toi de :
-  - [ ] valider ou compléter `LocalState(nodeId, humidity, quotaRemaining, pumpState, deferredReplies)` (tu peux ajouter des champs)
-  - [ ] l'implémenter dans `FarmerNode` : `getLocalState()` → copie cohérente (appelée sur le thread du `MessageHandler`, entre deux messages)
-  - [ ] **règle importante** : quand une action modifie l'état ET envoie un message, faire les deux dans un bloc `synchronized (mqttClient)`, pour qu'un snapshot ne s'intercale jamais entre les deux
-- [ ] Valider le format de `GlobalSnapshot` / `LocalSnapshot` proposé par Binôme 1 (contrat v3.3, section 7).
+**Test de validation :** ✅ `WaterAllocatorAndPumpTest` (5) ; en réseau : la 4e allocation de A est limitée à 20 L par le quota restant ; compteurs locaux = valeurs recalculées depuis la chaîne sur les 3 nœuds ; aucun bloc refusé. *Vérifié en retirant le quota du calcul : 5 tests échouent, les autres nœuds refusent le bloc (règle V6).* `mvn test` : **146 tests, 0 échec** (stable sur 2 exécutions).
 
 ---
 
-## ⬜ Partie 6 : Intégration de la séquence d'irrigation (semaine 3, avec Binôme 1)
+## 🟡 Partie 5 : Interfaces fournies à Binôme 1 — en grande partie faite
+
+- [x] `LocalStateProvider` implémenté dans `FarmerNode` : `getLocalState()` → humidité, quota, état de la pompe et REPLY différés (`ra.view()`, lecture atomique).
+- [x] `LocalState(nodeId, humidity, quotaRemaining, pumpState, deferredReplies)` **validé tel quel** (aucun champ ajouté).
+- [x] Règle `synchronized (mqttClient)` respectée : Ricart-Agrawala (changement d'état + message) et mise à jour des compteurs après irrigation.
+- [x] Format `GlobalSnapshot` / `LocalSnapshot` : utilisé dans les tests (état de chaque nœud, longueur du registre) ; à revoir en l'affichant dans le dashboard.
+- [ ] **À proposer à Binôme 1 :** dans `IrrigationSequence`, `addBlock` puis `onIrrigated` ne sont pas sous le même verrou que l'enregistrement du snapshot. Un snapshot peut donc tomber entre les deux : registre avec le nouveau bloc, quota local pas encore mis à jour (écart d'une irrigation au plus ; le test le tolère). Correction simple côté Binôme 1 : faire `addBlock` + `listener.onIrrigated` dans `synchronized (sender)`.
+
+---
+
+## 🟡 Partie 6 : Intégration de la séquence d'irrigation (semaine 3, avec Binôme 1)
 
 *La séquence est déjà codée par Binôme 1 (`IrrigationSequence`, contrat v3.4) : tu fournis seulement la pompe, l'allocation et tes compteurs.*
-- [ ] Dans `FarmerNode` : `NodeRuntime rt = new NodeRuntime(id, this)` (tout ce que Binôme 1 fournit, déjà branché), puis brancher `RicartAgrawala` : `rt.handler().register(ra, REQUEST, REPLY, RELEASE)` et `rt.start()`.
-- [ ] `RicartAgrawala implements PumpAccess` (interface déjà dans `irrigation/`).
-- [ ] Irriguer avec `rt.irrigationSequence(ra).irrigate(allocation, listener)` :
-  - [ ] `allocation` : `(quota, reservoir) -> min(besoin, quota, reservoir)` (`WaterAllocator`) ; quota et réservoir sont recalculés depuis la chaîne
-  - [ ] `listener.onIrrigated(bloc)` : mettre à jour tes compteurs (quota, `PumpResource`) ; `onRefused(raison)` : log ; `onNothingAllocated()` : rien
+- [x] Dans `FarmerNode` : `NodeRuntime rt = new NodeRuntime(id, this)` (tout ce que Binôme 1 fournit, déjà branché), puis brancher `RicartAgrawala` : `rt.handler().register(ra, REQUEST, REPLY, RELEASE)` et `rt.start()`.
+- [x] `RicartAgrawala implements PumpAccess` (interface déjà dans `irrigation/`).
+- [x] Irriguer avec `rt.irrigationSequence(ra).irrigate(allocation, listener)` :
+  - [x] `allocation` : `(quota, reservoir) -> min(besoin, quota, reservoir)` (`WaterAllocator`) ; quota et réservoir sont recalculés depuis la chaîne
+  - [x] `listener.onIrrigated(bloc)` : mettre à jour tes compteurs (quota, `PumpResource`) ; `onRefused(raison)` : log ; `onNothingAllocated()` : rien
 - [ ] Vérifier que le scénario fonctionne quand le broker authentifié est activé.
 - [ ] Scénario complet en console avec Binôme 1 (3 demandes quasi simultanées, avec le vrai Ricart-Agrawala).
 
@@ -144,6 +144,6 @@
 
 - [ ] Rôle exact de `RELEASE`.
 - [x] ~~Valeurs initiales : réservoir, quota par agriculteur~~ → **fixées en v3 : réservoir 1000 L, quota 200 L** (la validation des blocs en dépend).
-- [ ] Seuil d'humidité.
-- [ ] Contenu de `LocalState` — **à toi de proposer**, Binôme 1 valide.
+- [ ] Seuil d'humidité → **proposé : 30 %, cible 60 %** (`FarmerState`), à faire valider par Binôme 1.
+- [x] ~~Contenu de `LocalState`~~ → **validé tel quel** par Binôme 2.
 - [ ] Format de `GlobalSnapshot` — proposé par Binôme 1, **à toi de valider** (c'est toi qui l'affiches).
