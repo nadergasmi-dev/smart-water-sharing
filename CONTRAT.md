@@ -1,6 +1,11 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.3** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3). À valider par Binôme 1 et Binôme 2.
+**Version 3.4** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3) + intégration de la séquence d'irrigation (v3.4). À valider par Binôme 1 et Binôme 2.
+
+**Changements de la version 3.4 par rapport à la 3.3 (intégration) :**
+- La séquence de la section 8 est codée une fois pour toutes dans `IrrigationSequence` (Binôme 1) ; Binôme 2 fournit la pompe (`PumpAccess`), l'allocation et la mise à jour de ses compteurs (section 7).
+- `NodeRuntime` (Binôme 1) assemble et branche tout ce que Binôme 1 fournit à un nœud ; `FarmerNode` (Binôme 2) n'a plus qu'à y brancher Ricart-Agrawala.
+- Section 8 : l'allocation reçoit le quota et le réservoir **recalculés à partir de la chaîne** ; pas de bloc sur une copie connue pour être en retard.
 
 **Changements de la version 3.3 par rapport à la 3.2 (Chandy-Lamport) :**
 - Nouveau type `SNAPSHOT_STATE` (section 4.3) : chaque nœud diffuse son instantané local une fois terminé, pour que chacun (et le dashboard) puisse assembler l'état global. On passe de 8 à 9 types.
@@ -355,6 +360,29 @@ public interface PumpAccess {
     void releasePump();   // envoie les REPLY différés + RELEASE
 }
 
+// integration (Binôme 1) : séquence d'irrigation (section 8) et assemblage d'un nœud
+public final class IrrigationSequence {
+    interface Allocation { int liters(int quotaRemaining, int reservoirRemaining); }   // Binôme 2
+    interface Listener {                                                               // Binôme 2
+        void onIrrigated(Block block);            // mettre à jour les compteurs (seulement si bloc accepté)
+        default void onNothingAllocated() { }
+        default void onRefused(String reason) { } // ex. "V6 : quota dépassé…"
+    }
+    Result irrigate(Allocation allocation, Listener listener); // IRRIGATED | NOTHING_ALLOCATED | REFUSED
+}                                                              //   | LEDGER_NOT_UP_TO_DATE
+public class NodeRuntime {
+    NodeRuntime(String nodeId, LocalStateProvider stateProvider);   // clés keys/, broker et mot de passe de Config
+    void start();  void stop();                                     // start : connexion + rattrapage du registre
+    IrrigationSequence irrigationSequence(PumpAccess pump);
+    LamportClock clock();  NodeMqttClient sender();  MessageHandler handler();
+    Blockchain ledger();   LedgerReplicator replicator();  ChandyLamport snapshot();
+}
+// FarmerNode (Binôme 2) :
+//   NodeRuntime rt = new NodeRuntime("A", this);
+//   RicartAgrawala ra = new RicartAgrawala("A", rt.clock(), rt.sender());
+//   rt.handler().register(ra, REQUEST, REPLY, RELEASE);  rt.start();
+//   rt.irrigationSequence(ra).irrigate((quota, reservoir) -> Math.min(besoin, Math.min(quota, reservoir)), listener);
+
 // security (Binôme 1)
 public final class KeyGenerator {
     /** Génère keys/{id}.pub et keys/{id}.key pour A, B et C. À lancer une fois. */
@@ -442,14 +470,17 @@ public record GlobalSnapshot(String snapshotId, String initiator, Map<String, Lo
 Dans la section critique, dans cet ordre :
 
 1. `requestPump()` : entrée en section critique.
-2. Calcul de l'allocation (section 9).
+   - Vérification que la copie du registre est à jour : si un autre nœud est connu pour avoir une copie plus longue, rattrapage (section 4.2) ; s'il n'aboutit pas, **pas de bloc** (il créerait une fourche), aller à l'étape 6.
+2. Calcul de l'allocation (section 9), avec le quota restant et le réservoir **recalculés à partir de la chaîne** (`Blockchain.getQuota`, `getReservoirRemaining`) : les mêmes valeurs que celles que les autres nœuds vérifieront (V6, V7).
 3. Si `attribué > 0` : création du bloc (`Ledger.addBlock`).
    - **Si `InvalidBlockException`** : log de la raison, pas d'irrigation, **aucun** compteur modifié, aller directement à l'étape 6.
 4. Mise à jour des compteurs locaux (quota, réservoir) — **seulement après le succès de `addBlock`**.
 5. Diffusion de `IRRIGATION_EVENT`, puis de `LEDGER_UPDATE`.
 6. `releasePump()` : `RELEASE` puis envoi des `REPLY` différés.
 
-Le bloc est diffusé **avant** les `REPLY` différés, pour que le nœud suivant ait un registre à jour avant de créer son propre bloc. Avant de créer un bloc, un nœud vérifie que sa chaîne est à jour avec le dernier `LEDGER_UPDATE` reçu.
+Le bloc est diffusé **avant** les `REPLY` différés, pour que le nœud suivant ait un registre à jour avant de créer son propre bloc. Comme le `LEDGER_UPDATE` et le `REPLY` partent sur le **même topic** (`water/from/{id}`), le nœud suivant traite toujours le bloc avant l'autorisation d'entrer (ordre FIFO). `releasePump()` est appelé dans **tous** les cas, y compris si une exception est levée.
+
+Cette séquence est implémentée par `IrrigationSequence` (section 7).
 
 ---
 
