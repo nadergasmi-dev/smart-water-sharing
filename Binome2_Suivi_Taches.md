@@ -21,20 +21,20 @@
 
 ---
 
-## ⬜ Partie 1 : Horloge de Lamport (semaine 1, jours 1-2 — PRIORITAIRE)
+## ✅ Partie 1 : Horloge de Lamport — FAITE (14/11/2026)
 
 *À livrer en premier : Binôme 1 en dépend pour `NodeMqttClient`.*
 
-- [ ] `LamportClock.java` : compteur `int` initialisé à 0, thread-safe (`synchronized` ou `AtomicInteger`).
-- [ ] `tick()` : incrémente et retourne la valeur.
-- [ ] `update(int received)` : `max(local, reçu) + 1`.
-- [ ] `get()`.
-- [ ] `compare(int tsA, String idA, int tsB, String idB)` : comparateur statique de priorité — plus petit `lamport` gagne, `from` départage l'égalité (`A < B < C`).
-- [ ] Tests unitaires : incrément simple, update avec valeur plus grande, update avec valeur plus petite, égalité départagée par ID.
+- [x] `LamportClock.java` : compteur `int` initialisé à 0, thread-safe (méthodes `synchronized`). Remplace le mock de Binôme 1, même signature (contrat, section 7).
+- [x] `tick()` : incrémente et retourne la valeur.
+- [x] `update(int received)` : `max(local, reçu) + 1`. Ne lève jamais d'exception (appelée par `MessageHandler` hors `try`) : une estampille mal formée ne fait qu'incrémenter.
+- [x] `get()`.
+- [x] `compare(int tsA, String idA, int tsB, String idB)` : plus petit `lamport` gagne, `from` départage l'égalité (`A < B < C`) ; identifiant `null` refusé.
+- [x] Tests unitaires (`LamportClockTest`, 15 tests) : incrément simple, update avec valeur plus grande / plus petite / égale / mal formée, causalité sur une chaîne A → B → C, ordre total (antisymétrie, transitivité), égalité départagée par ID, **concurrence** (8 threads × 10 000 `tick()` : aucune estampille perdue ni dupliquée). *Vérifié en retirant `synchronized` : le test de concurrence échoue bien (50 030 au lieu de 80 000).*
 
-**🔴 Prévenir Binôme 1 dès que c'est terminé — il est bloqué sans ça.**
+**🔴 Prévenir Binôme 1 dès que c'est terminé — il est bloqué sans ça.** → à faire après le `git push`.
 
-**Test de validation :** tests JUnit passent ; logs de A, B, C cohérents d'un message à l'autre.
+**Test de validation :** ✅ `mvn test` : 114 tests, 0 échec (les 99 de Binôme 1 + 15). ⬜ Logs de A, B, C : à revoir avec `FarmerNode` (Partie 2).
 
 ---
 
