@@ -1,1 +1,7 @@
 /target/
+
+# Clés privées de signature (contrat, section 1.1) : jamais commitées
+keys/*.key
+
+# Mots de passe MQTT en clair (voir Config.mqttPassword) : jamais commités
+config/mqtt-passwords.properties

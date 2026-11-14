@@ -8,6 +8,7 @@ package com.smartwater.communication;
  *
  * @author nader
  */
+import com.smartwater.Config;
 import com.smartwater.algorithms.LamportClock;
 import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
@@ -19,7 +20,6 @@ import java.util.UUID;
 
 public class NodeMqttClient implements MessageSender {
 
-    public static final String BROKER_URL = "tcp://localhost:1883";
     public static final String TOPIC_ALL = "water/all";
     public static final String TOPIC_NODE_PREFIX = "water/node/";
     public static final int QOS = 2;
@@ -86,7 +86,7 @@ public class NodeMqttClient implements MessageSender {
             if (client != null) {
             try { client.close(); } catch (Exception ignored) { }
         }
-        client = new MqttClient(BROKER_URL, nodeId, new MemoryPersistence());
+        client = new MqttClient(Config.BROKER_URL, nodeId, new MemoryPersistence());
 
         MqttConnectOptions opts = new MqttConnectOptions();
         opts.setCleanSession(true);
