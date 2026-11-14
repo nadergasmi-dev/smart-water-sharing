@@ -1,6 +1,11 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.1** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1). À valider par Binôme 1 et Binôme 2.
+**Version 3.2** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2). À valider par Binôme 1 et Binôme 2.
+
+**Changements de la version 3.2 par rapport à la 3.1 (réplication) :**
+- Deux nouveaux types de messages, `LEDGER_REQUEST` et `LEDGER_SYNC` (section 4.2) : un nœud en retard récupère les blocs manquants, chacun **revalidé par les 7 règles** avant d'être ajouté. On passe de 6 à 8 types.
+- Point ouvert « rattrapage » tranché (section 11). Interface `LedgerReplicator` ajoutée (section 7).
+- **Impact Binôme 2 :** aucun pour ses modules. Le dashboard peut suivre le registre avec un `LedgerReplicator` passif (section 7).
 Toute modification de ce fichier doit être annoncée à l'autre binôme et commitée avec un message explicite.
 
 Ce document fixe les conventions de communication entre les modules. Il ne contient aucun algorithme : il définit comment les parties de code se parlent, pour que chacun puisse développer en parallèle.
@@ -156,7 +161,7 @@ Tous les messages ont la même enveloppe :
 | Champ | Type | Description |
 |-------|------|-------------|
 | `msgId` | String (UUID) | Identifiant unique du message, sert à dédupliquer (et à refuser un message rejoué) |
-| `type` | String | L'un des 6 types de la section 4 |
+| `type` | String | L'un des 8 types de la section 4 |
 | `from` | String | ID de l'expéditeur (`A`, `B`, `C`). Doit être égal à l'expéditeur du topic `water/from/{id}`, sinon le message est jeté (section 2) |
 | `to` | String | ID du destinataire, ou `ALL` pour une diffusion. Un nœud ignore les messages qui ne lui sont pas destinés |
 | `lamport` | int | Timestamp logique de l'envoi (voir section 5) |
@@ -164,7 +169,7 @@ Tous les messages ont la même enveloppe :
 
 ---
 
-## 4. Les 6 types de messages
+## 4. Les 8 types de messages
 
 La sécurisation n'ajoute **aucun** type de message.
 
@@ -194,11 +199,17 @@ Tous les messages sont publiés sur le topic de leur expéditeur, `water/from/{f
 |------|------|------|---------|
 | `IRRIGATION_EVENT` | « J'ai arrosé » | `ALL` | `{ "txId": "T-001", "liters": 40, "quotaRemaining": 160, "reservoirLevel": 460 }` |
 | `LEDGER_UPDATE` | « Voici le nouveau bloc » | `ALL` | `{ "block": { ...voir section 6, avec signature... } }` |
+| `LEDGER_REQUEST` | « Envoyez-moi les blocs à partir de l'index N » | `ALL` | `{ "fromIndex": 3, "lastHash": "9f86d081..." }` (`fromIndex` = longueur de ma chaîne) |
+| `LEDGER_SYNC` | « Voici mon état et les blocs qui te manquent » | `{demandeur}` | `{ "length": 5, "lastHash": "a7c3e1f4...", "blocks": [ {bloc 3}, {bloc 4} ] }` (liste vide si rien ne manque) |
 
 - `IRRIGATION_EVENT` annonce l'irrigation et met à jour la vision de l'état (quota de l'émetteur, niveau du réservoir).
 - `LEDGER_UPDATE` : le récepteur applique **les 7 règles de validation** (section 6.3) par rapport à **son** dernier bloc. Si le bloc est valide, il l'ajoute ; sinon il le **refuse**, ne l'ajoute pas, et signale une **divergence** avec la raison du refus (log + liste des blocs refusés, affichée par le dashboard).
 - `LEDGER_UPDATE` est envoyé uniquement si `addBlock` a réussi localement.
 - Seul le nœud qui tient la pompe crée un bloc, donc il n'y a pas de bloc concurrent de même index.
+- **Réception d'un bloc, 4 cas :** index déjà présent avec le même hash → doublon ignoré ; index déjà présent avec un autre hash → **fourche** signalée, rien n'est remplacé ; index = suivant → les 7 règles ; index plus loin → **trou** : le nœud est en retard et envoie un `LEDGER_REQUEST`.
+- **Rattrapage :** un nœud envoie `LEDGER_REQUEST` au démarrage, et automatiquement quand il détecte un trou (au plus une demande identique toutes les 2 s). Chaque autre nœud répond **toujours** par `LEDGER_SYNC` : son état (longueur + hash du dernier bloc) et les blocs qui manquent au demandeur. Le demandeur ajoute les blocs **un par un, chacun revalidé par les 7 règles**, et s'arrête au premier refusé. Les réponses en double (deux nœuds répondent) donnent des doublons, ignorés.
+- **Comparaison des copies :** chaque nœud garde le dernier état connu des autres (longueur + hash du dernier bloc), mis à jour par `LEDGER_UPDATE`, `LEDGER_REQUEST` et `LEDGER_SYNC`. Un nœud qui reçoit un `LEDGER_REQUEST` d'un nœud plus long que lui se rattrape à son tour ; à longueur égale et dernier hash différent, il signale une fourche.
+- **Ce n'est pas un consensus :** les blocs invalides sont refusés, mais deux versions valides concurrentes (fourche) sont seulement signalées, jamais départagées (section 10).
 
 ### 4.3 Famille snapshot (Chandy-Lamport) — logique et transport : Binôme 1
 
@@ -364,7 +375,21 @@ public interface Ledger {
 // Obtention par le dashboard : Ledger ledger = Blockchain.observer();  (clés publiques seulement,
 //   reçoit les LEDGER_UPDATE, les valide et enregistre les refus ; ne crée jamais de bloc)
 // Usage interne Binôme 1 : Blockchain.acceptBlock(Block b) throws InvalidBlockException,
-// appelée par LedgerReplicator à la réception d'un LEDGER_UPDATE.
+// appelée par LedgerReplicator à la réception d'un LEDGER_UPDATE ou d'un LEDGER_SYNC.
+
+// blockchain (Binôme 1) : réplication du registre
+public class LedgerReplicator implements MessageListener {
+    public LedgerReplicator(String nodeId, Blockchain ledger, MessageSender sender); // sender null = passif (dashboard)
+    public static final MessageType[] TYPES;   // LEDGER_UPDATE, LEDGER_REQUEST, LEDGER_SYNC
+    public void broadcast(Block block);        // diffuse un bloc ajouté avec succès (séquence d'irrigation, étape 5)
+    public void requestSync();                 // au démarrage d'un nœud : récupérer les blocs manquants
+    public List<Divergence> getDivergences();  // blocs refusés, fourches : (peer, index, reason, time)
+    public Map<String, PeerHead> getPeerHeads(); // dernier état connu des autres : (nodeId, length, lastHash, time)
+    public boolean isInSyncWith(String peer);  // même longueur et même dernier hash
+}
+// Branchement : handler.register(replicator, LedgerReplicator.TYPES);
+// Dashboard : new LedgerReplicator("DASHBOARD", Blockchain.observer(), null), alimenté avec les messages
+//   LEDGER_* lus sur water/from/+ (il voit aussi les LEDGER_SYNC destinés aux autres, et suit donc le registre).
 
 // node (Binôme 2 fournit, Binôme 1 utilise pour Chandy-Lamport)
 public interface LocalStateProvider {
@@ -434,7 +459,7 @@ attribué = min(besoin, quotaRestant, réservoirDisponible)
 ## 11. Points ouverts à trancher ensemble
 
 - [ ] Rôle exact de `RELEASE` : simple notification (proposé) ou libération explicite.
-- [ ] Rattrapage d'un nœud en retard sur le registre : message `LEDGER_REQUEST` / `LEDGER_SYNC` à ajouter, ou ignoré pour ce projet. **Si ajouté :** le nœud récupère les chaînes des autres, applique `validate()` et adopte la version valide partagée par la majorité (réconciliation, à ne pas présenter comme un consensus).
+- [x] ~~Rattrapage d'un nœud en retard~~ → **décidé en v3.2 : ajouté** (`LEDGER_REQUEST` / `LEDGER_SYNC`, section 4.2). Le nœud en retard ajoute les blocs manquants un par un, chacun revalidé par les 7 règles. Une fourche (deux versions valides) est **signalée** mais pas départagée : pas de vote à la majorité, ce n'est pas un consensus.
 - [x] ~~Ordre entre topics~~ → **décidé en v3.1 (Binôme 1)** : un topic unique par expéditeur `water/from/{id}`, destinataire filtré sur `to` à la réception. L'ACL (règles par nom d'utilisateur) interdit d'écrire sous le nom d'un autre : le champ `from` ne peut plus être usurpé et l'ordre d'un même expéditeur est préservé.
 - [ ] TLS sur le broker (port 8883) : activé ou laissé hors périmètre (tout tourne en local).
 - [ ] Seuil d'humidité.

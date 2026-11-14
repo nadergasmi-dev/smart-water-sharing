@@ -1,18 +1,18 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Enum.java to edit this template
- */
 package com.smartwater.communication;
 
-/**
- *
- * @author nader
- */
+/** Les 8 types de messages (contrat, section 4). */
 public enum MessageType {
+    // Accès à la pompe (Ricart-Agrawala)
     REQUEST,
     REPLY,
     RELEASE,
+    // Snapshot (Chandy-Lamport)
     MARKER,
+    // Registre
     IRRIGATION_EVENT,
-    LEDGER_UPDATE
+    LEDGER_UPDATE,
+    /** Rattrapage : « envoyez-moi les blocs à partir de l'index N ». */
+    LEDGER_REQUEST,
+    /** Rattrapage : réponse à un LEDGER_REQUEST, contient les blocs demandés. */
+    LEDGER_SYNC
 }
