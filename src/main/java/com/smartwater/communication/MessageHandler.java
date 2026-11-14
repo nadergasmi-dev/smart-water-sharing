@@ -20,7 +20,7 @@ public class MessageHandler implements Consumer<Message> {
 
     private final String nodeId;
     private final LamportClock clock;
-    private volatile SnapshotService snapshotService;   // peut rester null jusqu'à la partie 4
+    private volatile SnapshotService snapshotService;   // peut rester null jusqu'à la partie 5 (Chandy-Lamport)
     private final ExecutorService executor;
     // un MessageListener par type de message
     private final Map<MessageType, MessageListener> listeners = new EnumMap<>(MessageType.class);
