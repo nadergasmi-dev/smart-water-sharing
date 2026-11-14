@@ -232,53 +232,117 @@ class BrokerSecurityTest {
     void dashboardCannotPublishButCanRead() throws Exception {
         MqttClient a = asUser("A");
         MqttClient dashboard = asUser("DASHBOARD");
-        List<String> seenByA = listen(a, "water/all");
-        List<String> seenByDashboard = listen(dashboard, "water/all");
+        List<String> seenByA = listen(a, "water/from/+");
+        List<String> seenByDashboard = listen(dashboard, "water/from/+");
 
-        publish(dashboard, "water/all", "intrusion-du-dashboard");   // refusé par l'ACL (écarté silencieusement)
+        // refusés par l'ACL (écartés silencieusement) : sous son propre nom, et sous celui d'un nœud
+        publish(dashboard, "water/from/DASHBOARD", "intrusion-du-dashboard");
+        publish(dashboard, "water/from/A", "le-dashboard-se-fait-passer-pour-A");
         Thread.sleep(1000);
         assertTrue(seenByA.isEmpty(), "le dashboard ne doit rien pouvoir publier : " + seenByA);
 
-        // témoin : un vrai nœud, lui, peut diffuser, et le dashboard le lit
+        // témoin : un vrai nœud, lui, peut publier, et le dashboard le lit
         MqttClient b = asUser("B");
-        publish(b, "water/all", "diffusion-de-B");
+        publish(b, "water/from/B", "message-de-B");
         waitUntil(() -> !seenByA.isEmpty() && !seenByDashboard.isEmpty(), 3000);
-        assertEquals(List.of("diffusion-de-B"), seenByA);
-        assertEquals(List.of("diffusion-de-B"), seenByDashboard);
+        assertEquals(List.of("message-de-B"), seenByA);
+        assertEquals(List.of("message-de-B"), seenByDashboard);
     }
 
     @Test
-    void nodeDoesNotReceiveMessagesAddressedToAnotherNode() throws Exception {
+    void nodeCannotPublishUnderAnotherNodesName() throws Exception {
+        MqttClient a = asUser("A");
+        MqttClient c = asUser("C");
+        List<String> seenByA = listen(a, "water/from/+");
+
+        publish(c, "water/from/B", "usurpation-de-B-par-C");   // C écrit sous le nom de B : refusé par l'ACL
+        publish(c, "water/from/A", "usurpation-de-A-par-C");   // idem pour A
+        publish(c, "water/from/C", "message-legitime-de-C");   // sous son propre nom : accepté
+        waitUntil(() -> !seenByA.isEmpty(), 3000);
+        Thread.sleep(500);
+
+        assertEquals(List.of("message-legitime-de-C"), seenByA,
+                "seul ce que C publie sous son propre nom doit arriver");
+    }
+
+    @Test
+    void everyNodeCanReadEverySenderTopic() throws Exception {
         MqttClient a = asUser("A");
         MqttClient b = asUser("B");
         MqttClient c = asUser("C");
-        List<String> aSpiesOnB = listen(a, "water/node/B");   // A tente d'écouter le topic de B
-        List<String> bOwn = listen(b, "water/node/B");
+        List<String> seenByC = listen(c, "water/from/+");
 
-        publish(c, "water/node/B", "reply-de-C-pour-B");     // C a le droit d'écrire vers n'importe quel nœud
-        waitUntil(() -> !bOwn.isEmpty(), 3000);
-        Thread.sleep(500);
+        publish(a, "water/from/A", "de-A");
+        publish(b, "water/from/B", "de-B");
+        waitUntil(() -> seenByC.size() == 2, 3000);
 
-        assertEquals(List.of("reply-de-C-pour-B"), bOwn, "B reçoit son propre topic");
-        assertTrue(aSpiesOnB.isEmpty(), "A ne doit pas lire water/node/B : " + aSpiesOnB);
+        assertTrue(seenByC.containsAll(List.of("de-A", "de-B")), "C lit les topics de A et de B : " + seenByC);
+    }
+
+    // ---------------------------------------------------------------- usurpation du champ « from »
+
+    /** Enveloppe JSON minimale d'un message (le champ from est volontairement choisi par l'appelant). */
+    static String json(String msgId, String from, String to) {
+        return "{\"msgId\":\"" + msgId + "\",\"type\":\"REQUEST\",\"from\":\"" + from
+                + "\",\"to\":\"" + to + "\",\"lamport\":1,\"payload\":{}}";
     }
 
     @Test
-    void nodeCannotPublishOutsideTheWaterTopics() throws Exception {
-        MqttClient a = asUser("A");
-        MqttClient dashboard = asUser("DASHBOARD");
-        List<String> seen = new CopyOnWriteArrayList<>();
-        try {
-            dashboard.subscribe("#", 1, (t, m) -> seen.add(t));   // le dashboard n'a le droit de lire que water/all
-        } catch (MqttException ignored) { }
+    void fromFieldNotMatchingTheTopicIsDroppedAndCounted() throws Exception {
+        List<Message> atA = new CopyOnWriteArrayList<>();
+        List<Message> atB = new CopyOnWriteArrayList<>();
+        NodeMqttClient a = secureNode("A", atA);
+        NodeMqttClient b = secureNode("B", atB);
+        Thread.sleep(500);   // abonnements
 
-        publish(a, "autre/sujet", "hors-perimetre");
-        publish(a, "water/all", "dans-le-perimetre");
-        waitUntil(() -> seen.contains("water/all"), 3000);
+        // C publie sous SON nom (autorisé) mais écrit "from":"B" dans le JSON : usurpation
+        MqttClient c = asUser("C");
+        publish(c, "water/from/C", json("faux-1", "B", "ALL"));
+        waitUntil(() -> a.getSpoofedMessageCount() == 1 && b.getSpoofedMessageCount() == 1, 3000);
+
+        assertEquals(1, a.getSpoofedMessageCount(), "A détecte l'usurpation");
+        assertEquals(1, b.getSpoofedMessageCount(), "B aussi (on se fait passer pour lui)");
+        assertTrue(atA.isEmpty() && atB.isEmpty(), "le message usurpé n'est livré à aucun module");
+
+        // témoin : le même message avec un from honnête est livré normalement
+        publish(c, "water/from/C", json("vrai-1", "C", "ALL"));
+        waitUntil(() -> atA.size() == 1 && atB.size() == 1, 3000);
+        assertEquals("C", atA.get(0).getFrom());
+        assertEquals("C", atB.get(0).getFrom());
+        assertEquals(1, a.getSpoofedMessageCount(), "pas de fausse alerte sur un message légitime");
+    }
+
+    @Test
+    void forgingOnAnotherNodesTopicNeverReachesTheReceivers() throws Exception {
+        List<Message> atA = new CopyOnWriteArrayList<>();
+        NodeMqttClient a = secureNode("A", atA);
         Thread.sleep(500);
 
-        assertTrue(seen.contains("water/all"));
-        assertFalse(seen.contains("autre/sujet"), "A ne peut écrire que sous water/ : " + seen);
+        // C écrit directement sur le topic de B, avec un from « B » parfaitement cohérent : l'ACL l'arrête
+        MqttClient c = asUser("C");
+        publish(c, "water/from/B", json("faux-2", "B", "ALL"));
+        Thread.sleep(1000);
+
+        assertTrue(atA.isEmpty(), "le broker ne doit pas livrer un message écrit sous le nom de B par C");
+        assertEquals(0, a.getSpoofedMessageCount(), "il n'est même pas arrivé jusqu'à A");
+    }
+
+    @Test
+    void messageAddressedToAnotherNodeIsNotDelivered() throws Exception {
+        List<Message> atA = new CopyOnWriteArrayList<>();
+        List<Message> atB = new CopyOnWriteArrayList<>();
+        secureNode("A", atA);
+        secureNode("B", atB);
+        Thread.sleep(500);
+
+        // C envoie un message légitime destiné à B seul : A le reçoit du broker mais l'ignore (to = B)
+        MqttClient c = asUser("C");
+        publish(c, "water/from/C", json("pour-b", "C", "B"));
+        waitUntil(() -> atB.size() == 1, 3000);
+        Thread.sleep(500);
+
+        assertEquals(1, atB.size(), "B est le destinataire");
+        assertTrue(atA.isEmpty(), "A n'est pas le destinataire : message ignoré");
     }
 
     // ---------------------------------------------------------------- pile complète via le broker sécurisé

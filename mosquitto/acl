@@ -1,23 +1,21 @@
-# Nœuds : diffusent sur water/all, envoient des REPLY à n'importe quel nœud,
-# mais ne lisent que water/all et LEUR propre topic.
+# Un topic par expéditeur : water/from/<id>  (CONTRAT.md, sections 2 et 2.1)
+#
+# Chaque nœud écrit UNIQUEMENT sous son propre nom : il ne peut donc pas se faire passer pour un autre.
+# Les règles sont rattachées au NOM D'UTILISATEUR (authentifié par mot de passe), pas à l'identifiant
+# client MQTT, que n'importe quel client peut choisir librement.
+# Tous lisent water/from/+ ; le destinataire d'un message est dans le champ "to" du JSON.
 user A
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/A
+topic write water/from/A
+topic read  water/from/+
 
 user B
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/B
+topic write water/from/B
+topic read  water/from/+
 
 user C
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/C
+topic write water/from/C
+topic read  water/from/+
 
 # Dashboard : lecture seule
 user DASHBOARD
-topic read water/all
+topic read water/from/+

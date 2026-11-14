@@ -17,16 +17,21 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NodeMqttClient implements MessageSender {
 
-    public static final String TOPIC_ALL = "water/all";
-    public static final String TOPIC_NODE_PREFIX = "water/node/";
+    /** Un topic par expéditeur : {@code water/from/{id}} (contrat, section 2). Seul le nœud {id} peut y écrire (ACL). */
+    public static final String TOPIC_FROM_PREFIX = "water/from/";
+    /** Abonnement aux messages de tous les expéditeurs. */
+    public static final String TOPIC_FROM_ALL = TOPIC_FROM_PREFIX + "+";
     public static final int QOS = 2;
 
     private final String nodeId;
     private final LamportClock clock;
-    private final String topicNode;
+    private final String topicOut;
+    /** Messages jetés car leur champ {@code from} ne correspondait pas au topic (usurpation). */
+    private final AtomicInteger spoofedCount = new AtomicInteger();
     private MqttClient client;
         // Déduplication : on retient les 1000 derniers msgId vus
     private static final int DEDUP_CAPACITY = 1000;
@@ -58,7 +63,7 @@ public class NodeMqttClient implements MessageSender {
     public NodeMqttClient(String nodeId, LamportClock clock, String brokerUrl, String password) {
         this.nodeId = nodeId;
         this.clock = clock;
-        this.topicNode = TOPIC_NODE_PREFIX + nodeId;
+        this.topicOut = TOPIC_FROM_PREFIX + nodeId;
         this.brokerUrl = brokerUrl;
         this.password = password;
     }
@@ -168,11 +173,22 @@ public class NodeMqttClient implements MessageSender {
     }
 
     private void subscribeAll() throws MqttException {
-        client.subscribe(new String[] { TOPIC_ALL, topicNode }, new int[] { QOS, QOS });
+        client.subscribe(TOPIC_FROM_ALL, QOS);
     }
 
-    /** Réception brute : JSON -> Message. Le filtrage et la déduplication arrivent à l'étape 5. */
-     private void onRawMessage(String topic, MqttMessage mqttMessage) {
+    /**
+     * Réception brute : JSON -> Message, puis contrôles dans cet ordre :
+     * topic valide, message complet, expéditeur du topic = champ {@code from} (anti-usurpation),
+     * pas un message de soi-même, message destiné à ce nœud, pas un doublon.
+     */
+    private void onRawMessage(String topic, MqttMessage mqttMessage) {
+        // L'expéditeur réel est celui du topic : l'ACL du broker interdit d'écrire sous le nom d'un autre.
+        if (!topic.startsWith(TOPIC_FROM_PREFIX)) {
+            System.err.println("[" + nodeId + "] message reçu sur un topic inattendu, ignoré : " + topic);
+            return;
+        }
+        String sender = topic.substring(TOPIC_FROM_PREFIX.length());
+
         String json = new String(mqttMessage.getPayload(), java.nio.charset.StandardCharsets.UTF_8);
         Message m;
         try {
@@ -183,17 +199,31 @@ public class NodeMqttClient implements MessageSender {
         }
 
         // Message mal formé (champs obligatoires absents)
-        if (m == null || m.getType() == null || m.getFrom() == null || m.getMsgId() == null) {
+        if (m == null || m.getType() == null || m.getFrom() == null || m.getTo() == null
+                || m.getMsgId() == null) {
             System.err.println("[" + nodeId + "] message incomplet ignoré : " + json);
             return;
         }
 
-        // 1) Ignorer ses propres messages (reçus sur water/all)
-        if (nodeId.equals(m.getFrom())) {
+        // 1) Usurpation : le champ from doit être l'expéditeur du topic
+        if (!sender.equals(m.getFrom())) {
+            spoofedCount.incrementAndGet();
+            System.err.println("[" + nodeId + "] USURPATION détectée : message publié par « " + sender
+                    + " » qui se déclare « " + m.getFrom() + " » — jeté");
             return;
         }
 
-        // 2) Déduplication : add() renvoie false si le msgId est déjà connu
+        // 2) Ignorer ses propres messages (on est abonné à water/from/+, donc à son propre topic)
+        if (nodeId.equals(sender)) {
+            return;
+        }
+
+        // 3) Message destiné à un autre nœud : pas pour nous (le tri se fait ici, plus par topic)
+        if (!m.isBroadcast() && !nodeId.equals(m.getTo())) {
+            return;
+        }
+
+        // 4) Déduplication : add() renvoie false si le msgId est déjà connu
         if (!seenMsgIds.add(m.getMsgId())) {
             System.out.println("[" + nodeId + "] doublon ignoré : " + m.getMsgId());
             return;
@@ -213,6 +243,9 @@ public class NodeMqttClient implements MessageSender {
 
     public String getNodeId() { return nodeId; }
 
+    /** Nombre de messages jetés car leur champ {@code from} ne correspondait pas à leur topic. */
+    public int getSpoofedMessageCount() { return spoofedCount.get(); }
+
     // publish() : étape 5
     @Override
     public synchronized int publish(Message m) {
@@ -226,14 +259,12 @@ public class NodeMqttClient implements MessageSender {
         m.setMsgId(UUID.randomUUID().toString());
         m.setFrom(nodeId);
 
-        // topic déduit du champ "to"
-        String topic = m.isBroadcast() ? TOPIC_ALL : TOPIC_NODE_PREFIX + m.getTo();
-
+        // toujours sur son propre topic ; le destinataire est dans le champ "to"
         try {
             MqttMessage mqttMessage = new MqttMessage(
                     m.toJson().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             mqttMessage.setQos(QOS);
-            client.publish(topic, mqttMessage);
+            client.publish(topicOut, mqttMessage);
         } catch (MqttException e) {
             throw new RuntimeException("[" + nodeId + "] échec publication : " + e.getMessage(), e);
         }

@@ -1,6 +1,6 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.0** — sécurisation du registre et du broker. À valider par Binôme 1 et Binôme 2.
+**Version 3.1** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1). À valider par Binôme 1 et Binôme 2.
 Toute modification de ce fichier doit être annoncée à l'autre binôme et commitée avec un message explicite.
 
 Ce document fixe les conventions de communication entre les modules. Il ne contient aucun algorithme : il définit comment les parties de code se parlent, pour que chacun puisse développer en parallèle.
@@ -14,6 +14,13 @@ Ce document fixe les conventions de communication entre les modules. Il ne conti
 - Nouvelle hypothèse : **modèle de menace** (section 10).
 - Nouveaux éléments : package `security` (clés et signatures), classe `Config` (constantes partagées), dossiers `keys/` et `mosquitto/`.
 - **Répartition par partie** : chaque partie appartient entièrement à un seul binôme. La **sécurité** (registre + broker + clés) va à Binôme 1 ; le **dashboard** (tous les panneaux) va à Binôme 2.
+
+**Changements de la version 3.1 par rapport à la 3.0 (topics par expéditeur) :**
+- `water/all` et `water/node/{id}` sont **remplacés** par un topic unique par expéditeur : `water/from/{id}` (section 2). Le destinataire reste dans le champ `to`.
+- Un nœud ne peut écrire que sous son propre nom (ACL, section 2.1) : le champ `from` ne peut plus être usurpé. Le récepteur vérifie en plus que `from` correspond au topic.
+- Tous les messages d'un même expéditeur passent par le même topic : leur ordre est préservé (hypothèse FIFO, section 10).
+- **Impact Binôme 2 :** aucun changement d'API (`MessageSender.publish`, `MessageListener.onMessage`). Seul le **dashboard** change : il s'abonne à `water/from/+` au lieu de `water/all` (section 2). Les mots de passe MQTT se créent avec `mosquitto/setup.ps1` (section 2.1).
+- Contrepartie : un nœud peut techniquement lire les messages destinés à un autre (le tri se fait à la réception, par `to`). La confidentialité n'est pas un objectif (section 10).
 
 ---
 
@@ -73,13 +80,15 @@ Le responsable d'un module écrit son code et ses tests unitaires. L'autre binô
 - **QoS 2** pour tous les messages (livraison exactement une fois).
 - Déduplication par `msgId` quand même, par sécurité.
 
-| Topic | Usage | Abonnés |
-|-------|-------|---------|
-| `water/all` | Messages diffusés : `REQUEST`, `RELEASE`, `MARKER`, `IRRIGATION_EVENT`, `LEDGER_UPDATE` | Tous les nœuds + dashboard |
-| `water/node/{id}` | Messages ciblés : `REPLY` | Le nœud `{id}` |
+| Topic | Usage | Qui publie | Abonnés |
+|-------|-------|------------|---------|
+| `water/from/{id}` | **Tous** les messages de l'expéditeur `{id}` : diffusions et messages ciblés (`REQUEST`, `REPLY`, `RELEASE`, `MARKER`, `IRRIGATION_EVENT`, `LEDGER_UPDATE`) | Uniquement le nœud `{id}` (ACL, section 2.1) | Tous les nœuds et le dashboard, via `water/from/+` |
 
-- Un nœud reçoit ses propres messages sur `water/all` : il les **ignore** en filtrant sur `from`.
-- Le dashboard s'abonne à `water/all` et ne publie rien.
+- Le destinataire est indiqué par le champ `to` du JSON : `ALL` (diffusion) ou l'ID d'un nœud. Un nœud **ignore** tout message dont `to` n'est ni `ALL` ni son propre ID : le tri se fait à la réception, plus par topic.
+- Un nœud reçoit aussi ses propres messages (il est abonné à `water/from/+`) : il les **ignore** en comparant l'expéditeur du topic à son ID.
+- **Vérification de l'expéditeur :** le topic prouve qui a publié, car l'ACL interdit à un nœud d'écrire sous le nom d'un autre. À la réception, un message dont le champ `from` ne correspond pas au topic est **jeté** et signalé comme usurpation (`NodeMqttClient.getSpoofedMessageCount()`).
+- **Pourquoi un seul topic par expéditeur :** (1) l'identité de l'expéditeur est garantie par le broker ; (2) tous les messages d'un même expéditeur arrivent dans l'ordre où ils ont été envoyés, ce que Chandy-Lamport exige (section 10).
+- Le dashboard s'abonne à `water/from/+` et ne publie rien.
 
 ### 2.1 Sécurité du broker (Binôme 1)
 
@@ -93,39 +102,38 @@ password_file mosquitto/passwd
 acl_file mosquitto/acl
 ```
 
-**`mosquitto/passwd`** : un compte par client (`A`, `B`, `C`, `DASHBOARD`), créé avec `mosquitto_passwd`. Les mots de passe sont lus depuis `Config` (section 7) et ne sont pas commités en clair.
+**`mosquitto/passwd`** : un compte par client (`A`, `B`, `C`, `DASHBOARD`), créé avec `mosquitto_passwd`. Les mots de passe sont lus depuis `Config` (section 7) et ne sont pas commités en clair. Le script `mosquitto/setup.ps1` génère des mots de passe aléatoires dans `config/mqtt-passwords.properties` (lu par `Config.mqttPassword`) et construit `mosquitto/passwd` ; ni l'un ni l'autre ne sont commités : **chaque binôme lance le script chez lui**.
 
 **`mosquitto/acl`**
 ```
-# Nœuds : diffusent sur water/all, envoient des REPLY à n'importe quel nœud,
-# mais ne lisent que water/all et LEUR propre topic.
+# Un topic par expéditeur : water/from/<id>
+# Chaque nœud écrit UNIQUEMENT sous son propre nom : il ne peut donc pas se faire passer pour un autre.
+# Les règles sont rattachées au NOM D'UTILISATEUR (authentifié par mot de passe), pas à l'identifiant
+# client MQTT, que n'importe quel client peut choisir librement.
+# Tous lisent water/from/+ ; le destinataire d'un message est dans le champ "to" du JSON.
 user A
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/A
+topic write water/from/A
+topic read  water/from/+
 
 user B
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/B
+topic write water/from/B
+topic read  water/from/+
 
 user C
-topic write water/all
-topic write water/node/#
-topic read  water/all
-topic read  water/node/C
+topic write water/from/C
+topic read  water/from/+
 
 # Dashboard : lecture seule
 user DASHBOARD
-topic read water/all
+topic read water/from/+
 ```
 
 - `NodeMqttClient` se connecte avec `username = nodeId` et le mot de passe lu dans `Config`.
 - Le dashboard (Binôme 2) se connecte avec le compte `DASHBOARD` et le mot de passe lu dans `Config`.
-- Effet : une connexion anonyme est refusée, le dashboard ne peut rien publier, et un nœud ne peut pas lire les `REPLY` destinés à un autre.
-- **Limite :** l'ACL ne vérifie pas le champ `from` du JSON. Un nœud peut encore écrire `"from": "B"` dans un `REQUEST`. Pour les blocs, la signature (section 6) couvre ce cas ; pour les autres messages, voir le point ouvert sur les topics (section 11).
+- Effet : une connexion anonyme est refusée, le dashboard ne peut rien publier, et un nœud ne peut pas écrire sous le nom d'un autre (le topic prouve qui a publié).
+- **Pourquoi des règles par nom d'utilisateur (`user A`, …) et pas `pattern … %c` :** elles dépendent du compte authentifié par mot de passe. L'identifiant client MQTT (`%c`), lui, est choisi librement par le client et ne prouve rien.
+- **Usurpation du champ `from` :** impossible sans le mot de passe d'un autre nœud. L'ACL interdit d'écrire sous un autre nom, et le récepteur jette tout message dont `from` ne correspond pas au topic. Pour les blocs, la signature (section 6) reste la protection principale.
+- **Limite :** tout nœud peut *lire* les messages destinés à un autre (le tri par `to` se fait à la réception). Pas de confidentialité (section 10).
 - **TLS** (port 8883) : optionnel, car tout tourne en local (section 10). Point ouvert, section 11.
 
 ---
@@ -149,8 +157,8 @@ Tous les messages ont la même enveloppe :
 |-------|------|-------------|
 | `msgId` | String (UUID) | Identifiant unique du message, sert à dédupliquer (et à refuser un message rejoué) |
 | `type` | String | L'un des 6 types de la section 4 |
-| `from` | String | ID de l'expéditeur (`A`, `B`, `C`) |
-| `to` | String | ID du destinataire, ou `ALL` pour une diffusion |
+| `from` | String | ID de l'expéditeur (`A`, `B`, `C`). Doit être égal à l'expéditeur du topic `water/from/{id}`, sinon le message est jeté (section 2) |
+| `to` | String | ID du destinataire, ou `ALL` pour une diffusion. Un nœud ignore les messages qui ne lui sont pas destinés |
 | `lamport` | int | Timestamp logique de l'envoi (voir section 5) |
 | `payload` | objet JSON | Données propres au type, `{}` si vide |
 
@@ -160,13 +168,15 @@ Tous les messages ont la même enveloppe :
 
 La sécurisation n'ajoute **aucun** type de message.
 
+Tous les messages sont publiés sur le topic de leur expéditeur, `water/from/{from}` (section 2). Dans les tableaux ci-dessous, la colonne `to` donne leur destinataire.
+
 ### 4.1 Famille accès à la pompe (Ricart-Agrawala) — logique : Binôme 2, transport : Binôme 1
 
-| Type | Sens | Topic | Payload |
-|------|------|-------|---------|
-| `REQUEST` | « Je veux la pompe » | `water/all` | `{}` |
-| `REPLY` | « Je te laisse passer » | `water/node/{demandeur}` | `{}` |
-| `RELEASE` | « J'ai fini, la pompe est libre » | `water/all` | `{}` |
+| Type | Sens | `to` | Payload |
+|------|------|------|---------|
+| `REQUEST` | « Je veux la pompe » | `ALL` | `{}` |
+| `REPLY` | « Je te laisse passer » | `{demandeur}` | `{}` |
+| `RELEASE` | « J'ai fini, la pompe est libre » | `ALL` | `{}` |
 
 - La **priorité** d'un `REQUEST` est le couple `(lamport, from)`. Le plus petit `lamport` gagne ; en cas d'égalité, le plus petit `from` gagne.
 - Le champ `lamport` du `REQUEST` **est** le timestamp de la demande : pas de champ `requestTs` dans le payload.
@@ -180,10 +190,10 @@ La sécurisation n'ajoute **aucun** type de message.
 
 ### 4.2 Famille registre (blockchain) — logique et transport : Binôme 1
 
-| Type | Sens | Topic | Payload |
-|------|------|-------|---------|
-| `IRRIGATION_EVENT` | « J'ai arrosé » | `water/all` | `{ "txId": "T-001", "liters": 40, "quotaRemaining": 160, "reservoirLevel": 460 }` |
-| `LEDGER_UPDATE` | « Voici le nouveau bloc » | `water/all` | `{ "block": { ...voir section 6, avec signature... } }` |
+| Type | Sens | `to` | Payload |
+|------|------|------|---------|
+| `IRRIGATION_EVENT` | « J'ai arrosé » | `ALL` | `{ "txId": "T-001", "liters": 40, "quotaRemaining": 160, "reservoirLevel": 460 }` |
+| `LEDGER_UPDATE` | « Voici le nouveau bloc » | `ALL` | `{ "block": { ...voir section 6, avec signature... } }` |
 
 - `IRRIGATION_EVENT` annonce l'irrigation et met à jour la vision de l'état (quota de l'émetteur, niveau du réservoir).
 - `LEDGER_UPDATE` : le récepteur applique **les 7 règles de validation** (section 6.3) par rapport à **son** dernier bloc. Si le bloc est valide, il l'ajoute ; sinon il le **refuse**, ne l'ajoute pas, et signale une **divergence** avec la raison du refus (log + liste des blocs refusés, affichée par le dashboard).
@@ -192,9 +202,9 @@ La sécurisation n'ajoute **aucun** type de message.
 
 ### 4.3 Famille snapshot (Chandy-Lamport) — logique et transport : Binôme 1
 
-| Type | Sens | Topic | Payload |
-|------|------|-------|---------|
-| `MARKER` | « Enregistre ton état » | `water/all` | `{ "snapshotId": "S1", "initiator": "A" }` |
+| Type | Sens | `to` | Payload |
+|------|------|------|---------|
+| `MARKER` | « Enregistre ton état » | `ALL` | `{ "snapshotId": "S1", "initiator": "A" }` |
 
 - Premier `MARKER` reçu pour un `snapshotId` : enregistrer l'état local, renvoyer un `MARKER` aux autres, commencer à enregistrer les canaux entrants.
 - `MARKER` suivants : arrêter l'enregistrement du canal d'où il vient.
@@ -410,14 +420,14 @@ attribué = min(besoin, quotaRestant, réservoirDisponible)
 ## 10. Hypothèses de fonctionnement
 
 1. **Aucune panne de nœud** pendant l'exécution (limite connue de Ricart-Agrawala). À écrire dans le rapport.
-2. **Canaux FIFO fiables** (exigés par Chandy-Lamport) : obtenus avec QoS 2 et l'ordre de publication d'un même client. MQTT ne garantit pas l'ordre entre deux topics différents ; c'est une hypothèse à écrire dans le rapport.
+2. **Canaux FIFO fiables** (exigés par Chandy-Lamport) : obtenus avec QoS 2 et **un seul topic par expéditeur** (`water/from/{id}`) : tous les messages d'un même expéditeur passent par le même topic, donc arrivent dans l'ordre où ils ont été envoyés. Reste une hypothèse à écrire dans le rapport : un seul broker, et l'ordre par topic garanti par MQTT.
 3. **La réplication du registre n'est pas un consensus** : SHA-256, le chaînage et les signatures détectent et refusent les blocs invalides, mais ne tranchent pas entre deux versions concurrentes.
 4. Tous les nœuds tournent sur la même machine et le même broker.
 5. **Modèle de menace :**
    - au plus **un** nœud au comportement malveillant (il peut modifier sa copie du registre ou envoyer des blocs falsifiés) ;
    - les **clés privées ne sont pas volées** et la machine hôte est de confiance ;
-   - **protégé :** intégrité des blocs (V1, V2), authenticité de l'auteur (V4), respect des quotas et du réservoir (V6, V7), accès au broker (section 2.1) ;
-   - **non couvert :** confidentialité (les blocs sont lisibles par tous, c'est voulu), usurpation du champ `from` dans `REQUEST`/`REPLY` (voir section 11), collusion de 2 nœuds sur 3, absence de consensus.
+   - **protégé :** intégrité des blocs (V1, V2), authenticité de l'auteur (V4), respect des quotas et du réservoir (V6, V7), accès au broker (section 2.1), identité de l'expéditeur de chaque message (topic par expéditeur + ACL, section 2) ;
+   - **non couvert :** confidentialité (les blocs et les messages sont lisibles par tous, c'est voulu), un nœud qui ne respecte pas le protocole (par exemple qui ne répond jamais à un `REQUEST` : Ricart-Agrawala suppose des nœuds honnêtes), collusion de 2 nœuds sur 3, absence de consensus, TLS (tout tourne en local, section 11).
 
 ---
 
@@ -425,7 +435,7 @@ attribué = min(besoin, quotaRestant, réservoirDisponible)
 
 - [ ] Rôle exact de `RELEASE` : simple notification (proposé) ou libération explicite.
 - [ ] Rattrapage d'un nœud en retard sur le registre : message `LEDGER_REQUEST` / `LEDGER_SYNC` à ajouter, ou ignoré pour ce projet. **Si ajouté :** le nœud récupère les chaînes des autres, applique `validate()` et adopte la version valide partagée par la majorité (réconciliation, à ne pas présenter comme un consensus).
-- [ ] Ordre entre topics (décision de Binôme 1, car il possède le transport et Chandy-Lamport) : accepter l'hypothèse FIFO (section 10), ou faire publier chaque nœud sur un topic unique `water/from/{id}` filtré sur `to`. **Avantage sécurité de la 2e option :** avec la règle ACL `pattern write water/from/%c`, un nœud ne peut publier que sous son propre ID, ce qui rend le champ `from` impossible à usurper.
+- [x] ~~Ordre entre topics~~ → **décidé en v3.1 (Binôme 1)** : un topic unique par expéditeur `water/from/{id}`, destinataire filtré sur `to` à la réception. L'ACL (règles par nom d'utilisateur) interdit d'écrire sous le nom d'un autre : le champ `from` ne peut plus être usurpé et l'ordre d'un même expéditeur est préservé.
 - [ ] TLS sur le broker (port 8883) : activé ou laissé hors périmètre (tout tourne en local).
 - [ ] Seuil d'humidité.
 - [ ] Contenu de `LocalState` (Binôme 2 propose, Binôme 1 valide) et format de `GlobalSnapshot` (Binôme 1 propose, Binôme 2 valide).
