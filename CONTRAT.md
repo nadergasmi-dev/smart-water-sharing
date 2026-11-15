@@ -1,6 +1,12 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.5** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3) + intégration de la séquence d'irrigation (v3.4) + verrou de cohérence du snapshot et seuil d'humidité (v3.5). À valider par Binôme 1 et Binôme 2.
+**Version 3.6** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3) + intégration de la séquence d'irrigation (v3.4) + verrou de cohérence du snapshot et seuil d'humidité (v3.5) + balises d'état pour un dashboard lancé en retard (v3.6). À valider par Binôme 1 et Binôme 2.
+
+**Changements de la version 3.6 par rapport à la 3.5 (dashboard exact quel que soit le moment où il démarre) :**
+- **Problème constaté :** MQTT ne garde aucun historique et `mvn javafx:run` met 10 à 25 s à s'ouvrir. Le dashboard, qui ne peut rien publier (lecture seule), ne voyait donc que les messages postérieurs à son démarrage : registre figé (« 1 bloc, quotas 200/200 ») et compteurs de pompe décalés pour toujours.
+- **Nouveau type `NODE_STATUS`** (10 types, section 4.4) : chaque nœud diffuse **chaque seconde** (`Config.STATUS_PERIOD_MS`) son état réel, sa chaîne complète et ses derniers blocs refusés. Aucun changement de sécurité : le dashboard reste en lecture seule (ACL inchangée).
+- **Impact Binôme 2 :** `FarmerNode` fournit ses compteurs aux balises (`NodeRuntime.setStatsSupplier`) ; `DashboardModel` exploite les balises (déjà fait). Les balises ne sont ni dans le journal, ni dans le compteur de messages, ni dans les « messages en transit » d'un snapshot.
+- **Dashboard :** fenêtre adaptée à la taille de l'écran (la taille fixe 1280 × 820 dépassait d'un portable 1280 × 720), indicateur en ligne / hors ligne, défilement vers le dernier bloc. Scripts `scripts/run-demo.ps1` et `scripts/run-dashboard.ps1`.
 
 **Changements de la version 3.5 par rapport à la 3.4 (retours de Binôme 2) :**
 - **Verrou de cohérence du snapshot** : dans `IrrigationSequence`, « bloc → compteurs → `IRRIGATION_EVENT` → `LEDGER_UPDATE` » se fait d'un seul bloc, sous le verrou du client MQTT, le même que celui de Chandy-Lamport. Un snapshot ne voit jamais un registre à jour avec des compteurs pas encore mis à jour (section 8). **Règle d'ordre des verrous** pour Binôme 2 (section 7).
@@ -175,7 +181,7 @@ Tous les messages ont la même enveloppe :
 | Champ | Type | Description |
 |-------|------|-------------|
 | `msgId` | String (UUID) | Identifiant unique du message, sert à dédupliquer (et à refuser un message rejoué) |
-| `type` | String | L'un des 9 types de la section 4 |
+| `type` | String | L'un des 10 types de la section 4 |
 | `from` | String | ID de l'expéditeur (`A`, `B`, `C`). Doit être égal à l'expéditeur du topic `water/from/{id}`, sinon le message est jeté (section 2) |
 | `to` | String | ID du destinataire, ou `ALL` pour une diffusion. Un nœud ignore les messages qui ne lui sont pas destinés |
 | `lamport` | int | Timestamp logique de l'envoi (voir section 5) |
@@ -183,7 +189,7 @@ Tous les messages ont la même enveloppe :
 
 ---
 
-## 4. Les 9 types de messages
+## 4. Les 10 types de messages
 
 La sécurisation n'ajoute **aucun** type de message.
 
@@ -238,7 +244,24 @@ Tous les messages sont publiés sur le topic de leur expéditeur, `water/from/{f
 - `MARKER` suivants : arrêter l'enregistrement du canal d'où il vient.
 - Snapshot local terminé quand un `MARKER` a été reçu de chaque autre nœud. Le nœud diffuse alors `SNAPSHOT_STATE`. L'**état global est complet** quand les instantanés locaux de A, B et C sont connus.
 - `SNAPSHOT_STATE` publié au nom d'un autre nœud (`local.nodeId` ≠ expéditeur) : ignoré.
-- **Canaux FIFO :** garantis par un topic par expéditeur (section 2) ; `MARKER` et `SNAPSHOT_STATE` ne sont jamais enregistrés comme messages en transit.
+- **Canaux FIFO :** garantis par un topic par expéditeur (section 2) ; `MARKER`, `SNAPSHOT_STATE` et `NODE_STATUS` ne sont jamais enregistrés comme messages en transit.
+
+### 4.4 Famille supervision (balises d'état) — logique et transport : Binôme 1, contenu des compteurs : Binôme 2
+
+| Type | Sens | `to` | Payload |
+|------|------|------|---------|
+| `NODE_STATUS` | « Voici mon état, ma chaîne et mes refus » | `ALL` | `{ "local": LocalState, "stats": { "requests": 3, "entries": 3, "requestLamport": -1, "awaiting": ["B"] }, "blocks": [ bloc 1, bloc 2, … ], "rejected": [ { "block": …, "reason": "V6 : …", "time": … } ] }` |
+
+- **Émission :** par chaque nœud, toutes les `Config.STATUS_PERIOD_MS` (1 s), sur son topic `water/from/{id}`. L'état est lu **sous le verrou du client MQTT** (comme le snapshot et la séquence d'irrigation) : une balise ne montre jamais un bloc ajouté dont les compteurs ne sont pas encore à jour.
+- **Contenu :** `local` = `LocalState` (section 7) ; `stats` = compteurs propres au nœud, ouverts (`requests` = demandes, `entries` = accès à la pompe, `requestLamport` = estampille de la demande en cours ou -1, `awaiting` = REPLY encore attendus) ; `blocks` = la copie du registre **sans le genesis** ; `rejected` = les 20 derniers blocs refusés avec leur raison.
+- **But :** un observateur lancé en retard (le dashboard) se met à jour sans rien demander. Il n'a aucun historique (MQTT n'en garde pas) et ne peut rien publier.
+- **Réception par un réplicateur passif (dashboard) :** il met à jour ce qu'il sait de la copie de l'expéditeur, recopie les blocs qu'il n'a pas (**chacun revalidé par les 7 règles**) et ajoute les blocs refusés annoncés (un même bloc refusé pour la même raison n'apparaît qu'une fois). Une alerte identique (fourche, balise mal formée) n'est signalée **qu'une fois**, pas une fois par seconde.
+- **Réception par un nœud :** il met à jour ce qu'il sait de la copie de l'autre (`getPeerHeads`) ; s'il est en retard, il demande un rattrapage (section 4.2). Il ne recopie rien lui-même.
+- **Reconstitution de la pompe par le dashboard :** il compte les `REQUEST` / `REPLY` / `RELEASE` en direct, et **recale** ces compteurs sur l'état annoncé par chaque balise (sans cela, avoir raté un cycle le décalerait d'un cran pour toujours). Les compteurs `requests` / `entries` affichés sont la valeur annoncée plus ce qui s'est passé depuis la balise.
+- **Présence :** un nœud sans message ni balise depuis plus de 4 s est affiché **hors ligne**.
+- **Exclusions :** les balises ne sont ni affichées dans le journal du dashboard, ni comptées comme messages applicatifs, ni enregistrées comme messages en transit par Chandy-Lamport. Elles font avancer l'horloge de Lamport comme tout message envoyé.
+- **Limite :** une balise est publiée par le nœud lui-même. Un nœud malveillant pourrait annoncer un faux état (affichage trompeur), mais jamais un faux bloc : tout bloc reçu par balise repasse par les 7 règles. La supervision ne remplace pas la vérification.
+- **Taille :** environ 300 octets par bloc (soit quelques Ko pour les 20 à 60 blocs d'une démonstration), une fois par seconde et par nœud.
 - **Enregistrement des canaux :** pendant un snapshot, `MessageHandler` (Binôme 1) transmet chaque message reçu à `SnapshotService.onMessage(m)` **avant** de l'envoyer au module concerné. Si le canal d'où vient le message est en cours d'enregistrement, le message est ajouté à l'état du canal, puis traité normalement.
 - **État local :** `ChandyLamport` obtient l'état du nœud (humidité, quota, état de la pompe) via `LocalStateProvider` (section 7), implémenté par Binôme 2, et lit lui-même le registre.
 
@@ -330,6 +353,7 @@ public final class Config {
     public static final int    QUOTA_INITIAL     = 200;    // litres par agriculteur
     public static final String KEYS_DIR          = "keys";
     public static final int    HUMIDITY_THRESHOLD = 30;    // % : en dessous, le nœud demande à irriguer
+    public static final long   STATUS_PERIOD_MS   = 1000;  // période des balises d'état NODE_STATUS
     /** Mot de passe MQTT d'un client (A, B, C, DASHBOARD), lu depuis une variable
      *  d'environnement ou un fichier local non commité. */
     public static String mqttPassword(String clientId);
@@ -377,7 +401,9 @@ public final class IrrigationSequence {
 }                                                              //   | LEDGER_NOT_UP_TO_DATE
 public class NodeRuntime {
     NodeRuntime(String nodeId, LocalStateProvider stateProvider);   // clés keys/, broker et mot de passe de Config
-    void start();  void stop();                                     // start : connexion + rattrapage du registre
+    void start();  void stop();                                     // start : connexion + rattrapage + balises d'état
+    void setStatsSupplier(Supplier<JsonObject> stats);              // compteurs joints aux balises (Binôme 2)
+    void startBeacons(long periodMs);  void publishStatus();        // balises NODE_STATUS (section 4.4)
     IrrigationSequence irrigationSequence(PumpAccess pump);
     LamportClock clock();  NodeMqttClient sender();  MessageHandler handler();
     Blockchain ledger();   LedgerReplicator replicator();  ChandyLamport snapshot();
@@ -423,7 +449,7 @@ public interface Ledger {
 // blockchain (Binôme 1) : réplication du registre
 public class LedgerReplicator implements MessageListener {
     public LedgerReplicator(String nodeId, Blockchain ledger, MessageSender sender); // sender null = passif (dashboard)
-    public static final MessageType[] TYPES;   // LEDGER_UPDATE, LEDGER_REQUEST, LEDGER_SYNC
+    public static final MessageType[] TYPES;   // LEDGER_UPDATE, LEDGER_REQUEST, LEDGER_SYNC, NODE_STATUS
     public void broadcast(Block block);        // diffuse un bloc ajouté avec succès (séquence d'irrigation, étape 5)
     public void requestSync();                 // au démarrage d'un nœud : récupérer les blocs manquants
     public List<Divergence> getDivergences();  // blocs refusés, fourches : (peer, index, reason, time)
@@ -432,7 +458,8 @@ public class LedgerReplicator implements MessageListener {
 }
 // Branchement : handler.register(replicator, LedgerReplicator.TYPES);
 // Dashboard : new LedgerReplicator("DASHBOARD", Blockchain.observer(), null), alimenté avec les messages
-//   LEDGER_* lus sur water/from/+ (il voit aussi les LEDGER_SYNC destinés aux autres, et suit donc le registre).
+//   LEDGER_* et NODE_STATUS lus sur water/from/+ (il voit aussi les LEDGER_SYNC destinés aux autres ; les balises
+//   le mettent à jour même s'il démarre bien après les nœuds).
 
 // node (Binôme 2 fournit, Binôme 1 utilise pour Chandy-Lamport)
 public interface LocalStateProvider {

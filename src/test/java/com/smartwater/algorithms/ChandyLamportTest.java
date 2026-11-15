@@ -283,4 +283,19 @@ class ChandyLamportTest {
         assertThrows(UnsupportedOperationException.class, () -> a.channels().put("X", new ArrayList<>()));
         assertThrows(UnsupportedOperationException.class, () -> a.channels().get("B").add(null));
     }
+
+    @Test
+    void stateBeaconsAreNeverRecordedAsMessagesInTransit() {
+        // B diffuse une balise d'état, puis A lance un snapshot ; la balise arrive chez C APRÈS son enregistrement
+        senderFor("B").publish(new Message(MessageType.NODE_STATUS, Message.ALL, new JsonObject()));
+        nodes.get("A").cl.startSnapshot();
+        deliver("A", "C");                     // C enregistre son état et écoute le canal B->C
+        assertEquals(MessageType.NODE_STATUS, deliver("B", "C"));
+        deliverAll();
+
+        GlobalSnapshot g = nodes.get("A").cl.getResult();
+        assertTrue(g.isComplete());
+        assertTrue(g.messagesInTransit().isEmpty(), "la supervision n'est pas un message applicatif");
+        assertEquals(300, recordedTotal(g));
+    }
 }

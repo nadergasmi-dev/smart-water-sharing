@@ -1,6 +1,6 @@
 package com.smartwater.communication;
 
-/** Les 9 types de messages (contrat, section 4). */
+/** Les 10 types de messages (contrat, section 4). */
 public enum MessageType {
     // Accès à la pompe (Ricart-Agrawala)
     REQUEST,
@@ -16,5 +16,11 @@ public enum MessageType {
     /** Rattrapage : « envoyez-moi les blocs à partir de l'index N ». */
     LEDGER_REQUEST,
     /** Rattrapage : réponse à un LEDGER_REQUEST, contient les blocs demandés. */
-    LEDGER_SYNC
+    LEDGER_SYNC,
+    /**
+     * Balise d'état (supervision) : chaque nœud diffuse périodiquement son état réel (pompe, humidité, quota,
+     * compteurs) et sa chaîne complète. Permet à un observateur en lecture seule (dashboard) lancé en retard
+     * de se mettre à jour sans rien publier. Ce n'est PAS un message applicatif : jamais enregistré en transit.
+     */
+    NODE_STATUS
 }

@@ -28,6 +28,8 @@ public final class Config {
     public static final String KEYS_DIR = "keys";
     /** Seuil d'humidité du sol (en %) : en dessous, un nœud demande à irriguer (proposé par Binôme 2). */
     public static final int HUMIDITY_THRESHOLD = 30;
+    /** Période des balises d'état NODE_STATUS (ms) : un dashboard lancé en retard est à jour en au plus ce délai. */
+    public static final long STATUS_PERIOD_MS = 1000;
 
     /** Nœuds agriculteurs (contrat, section 1). Chacun possède une paire de clés. */
     public static final List<String> NODE_IDS = List.of("A", "B", "C");

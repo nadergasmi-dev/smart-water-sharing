@@ -7,6 +7,8 @@ import com.smartwater.Config;
 import com.smartwater.communication.Message;
 import com.smartwater.communication.MessageSender;
 import com.smartwater.communication.MessageType;
+import com.smartwater.node.LocalState;
+import com.smartwater.node.NodeStatus;
 import com.smartwater.security.KeyGenerator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -355,5 +357,80 @@ class LedgerReplicatorTest {
 
         assertEquals(3, observer.getChain().size());
         assertIdentical("A", "B", "C");
+    }
+
+    // ---------------------------------------------------------------- balises d'état NODE_STATUS
+
+    /** Balise de {@code id} avec la chaîne annoncée (sans genesis), livrée comme sur le réseau. */
+    void injectBeacon(String id, List<Block> blocks) {
+        NodeStatus st = new NodeStatus(new LocalState(id, 40.0, 200, "RELEASED", List.of()), null, blocks);
+        inject(id, MessageType.NODE_STATUS, Message.ALL, st.toPayload());
+    }
+
+    List<Block> withoutGenesis(String id) {
+        List<Block> chain = ledgers.get(id).getChain();
+        return chain.subList(1, chain.size());
+    }
+
+    @Test
+    void passiveObserverStartingLateCatchesUpFromASingleBeacon() throws Exception {
+        irrigate("A", 40);
+        irrigate("B", 50);
+        irrigate("C", 30);                                   // 3 blocs déjà passés : l'observateur n'était pas là
+
+        Blockchain observer = new Blockchain(null, publicKeys, Config.initialQuotas(), Config.RESERVOIR_INITIAL);
+        LedgerReplicator dashboard = new LedgerReplicator("DASHBOARD", observer, null);
+        net.nodes.put("DASHBOARD", dashboard);
+        net.seesEverything.add("DASHBOARD");
+        assertEquals(1, observer.getChain().size());
+
+        injectBeacon("A", withoutGenesis("A"));
+
+        assertEquals(4, observer.getChain().size(), "la chaîne complète arrive avec la balise");
+        assertEquals(ledgers.get("A").getLastBlock().getHash(), observer.getLastBlock().getHash());
+        assertTrue(observer.validate());
+        assertTrue(dashboard.getDivergences().isEmpty());
+        assertEquals(4, dashboard.getPeerHeads().get("A").length());
+    }
+
+    @Test
+    void activeNodeLearnsPeerHeadsFromBeaconsAndCatchesUpWhenBehind() throws Exception {
+        net.offline.add("C");
+        irrigate("A", 40);
+        irrigate("B", 50);
+        net.offline.remove("C");
+        assertEquals(1, ledgers.get("C").getChain().size(), "C a raté deux blocs");
+
+        injectBeacon("A", withoutGenesis("A"));              // A annonce 3 blocs : C se rend compte qu'il est en retard
+
+        assertEquals(3, net.nodes.get("C").getPeerHeads().get("A").length());
+        assertIdentical("A", "B", "C");                       // rattrapage déclenché par la balise
+    }
+
+    @Test
+    void beaconsNeverCopyBlocksIntoAnActiveNode() throws Exception {
+        net.offline.add("C");
+        irrigate("A", 40);
+        net.offline.remove("C");
+        // C reçoit seulement la balise : il apprend la longueur de A mais n'en copie pas les blocs lui-même
+        net.queue.clear();
+        NodeStatus st = new NodeStatus(new LocalState("A", 40.0, 160, "RELEASED", List.of()), null, withoutGenesis("A"));
+        Message beacon = new Message(MessageType.NODE_STATUS, Message.ALL, st.toPayload());
+        beacon.setFrom("A");
+        net.nodes.get("C").onMessage(beacon);
+
+        assertEquals(1, ledgers.get("C").getChain().size(), "le rattrapage passe par LEDGER_REQUEST / LEDGER_SYNC");
+        assertTrue(net.queue.stream().anyMatch(m -> m.getType() == MessageType.LEDGER_REQUEST));
+    }
+
+    @Test
+    void malformedBeaconIsReportedOnlyOnce() {
+        JsonObject garbage = new JsonObject();
+        garbage.addProperty("local", "pas un objet");
+        for (int i = 0; i < 3; i++) {
+            inject("B", MessageType.NODE_STATUS, Message.ALL, garbage);   // une balise par seconde, toujours la même
+        }
+        assertEquals(1, net.nodes.get("A").getDivergences().size());
+        assertEquals(1, net.nodes.get("C").getDivergences().size());
     }
 }

@@ -101,4 +101,60 @@ class DashboardOverMqttTest {
         }
         assertEquals(0, client.getSpoofedCount());
     }
+
+    /**
+     * Le cas réel : {@code mvn javafx:run} met 10 à 25 s à s'ouvrir, donc le dashboard démarre toujours APRÈS le
+     * début de l'activité. MQTT ne garde aucun historique : sans les balises d'état il restait figé sur « 1 bloc,
+     * quotas 200/200 ». Ici il se connecte quand tout est déjà fini, et doit tout retrouver.
+     */
+    @Test
+    void unDashboardLanceApresLActiviteRetrouveToutGraceAuxBalises() throws Exception {
+        KeyGenerator.generateAll(keys, false);
+        for (String id : Config.NODE_IDS) {
+            farmers.put(id, new FarmerNode(id, keys, new SoilSimulator(0, 100, 0, 1.0, new Random(0)),
+                    new FarmerState(id)));
+        }
+        for (FarmerNode f : farmers.values()) f.start();
+        Thread.sleep(500);
+        List<Thread> threads = new ArrayList<>();
+        for (FarmerNode f : farmers.values()) {
+            threads.add(new Thread(() -> { f.step(); f.step(); }));
+        }
+        threads.forEach(Thread::start);
+        for (Thread t : threads) t.join(30_000);
+        List<Block> real = farmers.get("A").runtime().ledger().getChain();
+        assertEquals(7, real.size(), "6 irrigations de 60 L déjà enregistrées");
+
+        // ---- le dashboard démarre maintenant : il n'a rien vu de tout cela
+        DashboardModel model = new DashboardModel(keys);
+        client = new DashboardMqttClient(Config.BROKER_URL, null, model);
+        client.connect();
+        assertEquals(1, model.view().chain().size(), "au démarrage : seulement le genesis");
+
+        waitFor(() -> model.view().chain().size() == 7
+                && model.view().farmers().stream().allMatch(f -> f.humidity() != null), 6000);
+        DashboardModel.View v = model.view();
+
+        assertEquals(7, v.chain().size(), "registre complet sans avoir rien demandé");
+        for (int i = 0; i < real.size(); i++) {
+            assertEquals(real.get(i).getHash(), v.chain().get(i).hash());
+        }
+        assertTrue(v.chainValid());
+        assertEquals(1000 - 6 * 60, v.reservoir(), "réservoir exact");
+        for (DashboardModel.FarmerView f : v.farmers()) {
+            assertEquals("RELEASED", f.pumpState());
+            assertEquals(80, f.quota(), "quota exact : 200 - 2 x 60");
+            assertEquals(2, f.requests());
+            assertEquals(2, f.entries());
+            assertEquals("ONLINE", f.liveness());
+            assertNotNull(f.humidity(), "humidité fraîche, sans snapshot");
+        }
+        assertTrue(v.beacons() >= 3);
+        assertTrue(v.divergences().isEmpty());
+
+        // ---- les nœuds s'arrêtent : le dashboard ne reste pas figé sur des valeurs « vivantes »
+        farmers.values().forEach(FarmerNode::stop);
+        waitFor(() -> model.view().farmers().stream().allMatch(f -> f.liveness().equals("OFFLINE")), 9000);
+        model.view().farmers().forEach(f -> assertEquals("OFFLINE", f.liveness()));
+    }
 }

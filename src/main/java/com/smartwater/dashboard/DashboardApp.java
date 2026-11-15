@@ -31,6 +31,8 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.geometry.Rectangle2D;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
@@ -103,19 +105,30 @@ public class DashboardApp extends Application {
         Path keys = Path.of(opts.getOrDefault("keys", Config.KEYS_DIR));
         model = new DashboardModel(keys);
 
+        // La fenêtre s'adapte à la zone utile de l'écran (hors barre des tâches) : 1280 x 820 fixes dépassaient
+        // d'un portable 1280 x 720 et coupaient le bas (blocs refusés, barre d'état).
+        Rectangle2D screen = Screen.getPrimary().getVisualBounds();
+        compact = screen.getHeight() < 780;
+
         BorderPane root = new BorderPane();
-        root.setStyle("-fx-background-color: #f3f4f6; -fx-font-size: 13px;");
+        root.setStyle("-fx-background-color: #f3f4f6; -fx-font-size: " + (compact ? 12 : 13) + "px;");
         root.setTop(header());
-        VBox center = new VBox(12, overview(), details());
+        VBox center = new VBox(compact ? 8 : 12, overview(), details());
         VBox.setVgrow(center.getChildren().get(1), Priority.ALWAYS);
-        center.setPadding(new Insets(12));
+        center.setPadding(new Insets(compact ? 8 : 12));
         root.setCenter(center);
         status.setPadding(new Insets(4, 12, 4, 12));
         status.setStyle("-fx-text-fill: #374151;");
         root.setBottom(status);
 
+        double width = Math.min(1280, screen.getWidth() - 16);
+        double height = Math.min(820, screen.getHeight() - 56);          // 56 : barre de titre + marge
         stage.setTitle("Smart Water Sharing : tableau de bord");
-        stage.setScene(new Scene(root, 1280, 820));
+        stage.setScene(new Scene(root, width, height));
+        stage.setMinWidth(Math.min(960, screen.getWidth()));
+        stage.setMinHeight(Math.min(520, screen.getHeight()));
+        stage.setX(screen.getMinX() + (screen.getWidth() - width) / 2);
+        stage.setY(screen.getMinY() + 6);
         stage.show();
 
         mqtt = new DashboardMqttClient(opts.getOrDefault("broker", Config.BROKER_URL), passwordOrNull(),
@@ -167,11 +180,11 @@ public class DashboardApp extends Application {
 
     private Node header() {
         Label title = new Label("Smart Water Sharing");
-        title.setStyle("-fx-font-size: 20px; -fx-font-weight: bold; -fx-text-fill: white;");
+        title.setStyle("-fx-font-size: " + (compact ? 17 : 20) + "px; -fx-font-weight: bold; -fx-text-fill: white;");
         Label sub = new Label("observation en lecture seule de water/from/+  ·  Ricart-Agrawala · blockchain · Chandy-Lamport");
         sub.setStyle("-fx-text-fill: #dbeafe;");
-        VBox box = new VBox(2, title, sub);
-        box.setPadding(new Insets(10, 14, 10, 14));
+        VBox box = compact ? new VBox(2, title) : new VBox(2, title, sub);
+        box.setPadding(compact ? new Insets(6, 14, 6, 14) : new Insets(10, 14, 10, 14));
         box.setStyle("-fx-background-color: #1e3a8a;");
         return box;
     }
@@ -190,13 +203,16 @@ public class DashboardApp extends Application {
         VBox reservoir = card("Réservoir commun", reservoirLabel, reservoirBar,
                 muted("recalculé depuis le registre (la chaîne fait foi)"));
         VBox pump = card("Pompe (section critique)", holderLabel, waitingLabel, exclusionLabel);
-        reservoir.setMinWidth(220);
-        pump.setMinWidth(240);
+        reservoir.setMinWidth(190);
+        pump.setMinWidth(200);
         row.getChildren().addAll(reservoir, pump);
         return row;
     }
 
     private final TabPane tabs = new TabPane();
+    /** Écran de faible hauteur (portable) : polices, marges et listes réduites. */
+    private boolean compact;
+    private TableView<DashboardModel.BlockView> ledgerTable;
 
     private Node details() {
         tabs.getTabs().addAll(
@@ -209,6 +225,7 @@ public class DashboardApp extends Application {
 
     private Node ledgerPane() {
         TableView<DashboardModel.BlockView> table = new TableView<>(blocks);
+        ledgerTable = table;
         table.getColumns().add(col("#", b -> b.index(), 45));
         table.getColumns().add(col("Heure", b -> b.index() == 0 ? "—" : TIME.format(Instant.ofEpochMilli(b.timestamp())), 80));
         table.getColumns().add(col("Agriculteur", b -> b.nodeId(), 90));
@@ -219,10 +236,11 @@ public class DashboardApp extends Application {
         table.getColumns().add(col("Signature", b -> b.signatureOk() == null ? "genesis"
                 : b.signatureOk() ? "✓ valide" : "✗ INVALIDE", 90));
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
-        table.setPlaceholder(new Label("en attente du premier bloc"));
+        table.setPlaceholder(new Label("en attente du premier bloc (le registre se complète dès la prochaine balise des nœuds)"));
 
         ListView<RejectedBlock> refused = new ListView<>(rejected);
-        refused.setPrefHeight(110);
+        refused.setPrefHeight(compact ? 64 : 110);
+        refused.setMinHeight(48);
         refused.setPlaceholder(new Label("aucun bloc refusé"));
         refused.setCellFactory(v -> new javafx.scene.control.ListCell<>() {
             @Override
@@ -254,7 +272,8 @@ public class DashboardApp extends Application {
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_FLEX_LAST_COLUMN);
         table.setPlaceholder(new Label("aucun état local reçu"));
         ListView<String> transit = new ListView<>(inTransit);
-        transit.setPrefHeight(110);
+        transit.setPrefHeight(compact ? 64 : 110);
+        transit.setMinHeight(48);
         transit.setPlaceholder(new Label("aucun message en transit"));
         Label transitTitle = new Label("Messages en transit au moment du snapshot (état des canaux)");
         transitTitle.setStyle("-fx-font-weight: bold;");
@@ -296,6 +315,9 @@ public class DashboardApp extends Application {
 
         if (v.chain().size() != blocks.size()) {
             blocks.setAll(v.chain());
+            if (ledgerTable != null && !blocks.isEmpty()) {
+                ledgerTable.scrollTo(blocks.size() - 1);          // toujours montrer le bloc le plus récent
+            }
         }
         if (v.rejected().size() != rejected.size()) {
             rejected.setAll(v.rejected());
@@ -315,16 +337,21 @@ public class DashboardApp extends Application {
             }
             events.setAll(lines);
         }
+        boolean silent = v.messages() == 0 && v.beacons() == 0;
         status.setText((mqtt != null && mqtt.isConnected() ? "● connecté" : "○ déconnecté") + "  ·  "
-                + v.messages() + " messages observés  ·  usurpations détectées : "
-                + (mqtt == null ? 0 : mqtt.getSpoofedCount()));
+                + v.messages() + " messages  ·  " + v.beacons() + " balises d'état  ·  usurpations détectées : "
+                + (mqtt == null ? 0 : mqtt.getSpoofedCount())
+                + (silent ? "  ·  aucun nœud détecté : lancez le scénario (scripts\\run-demo.ps1)" : ""));
     }
 
     private static String replication(DashboardModel.View v) {
         StringBuilder sb = new StringBuilder("Dernière copie annoncée : ");
         for (String id : Config.NODE_IDS) {
             LedgerReplicator.PeerHead h = v.peerHeads().get(id);
-            sb.append(id).append(" = ").append(h == null ? "?" : h.length() + " blocs").append("   ");
+            // ⚠ seulement si l'écart dure : une balise a jusqu'à 1 s de retard, ce n'est pas une anomalie
+            boolean lasting = h != null && System.currentTimeMillis() - h.time() > 3 * Config.STATUS_PERIOD_MS;
+            sb.append(id).append(" = ").append(h == null ? "?"
+                    : h.length() + " blocs " + (h.length() == v.chain().size() ? "✓" : lasting ? "⚠" : "…")).append("   ");
         }
         sb.append(v.divergences().isEmpty() ? " ·  aucune divergence" : " ·  ⚠ " + v.divergences().size()
                 + " divergence(s) : " + v.divergences().get(v.divergences().size() - 1).reason());
@@ -356,8 +383,10 @@ public class DashboardApp extends Application {
     private static final class FarmerCard {
         final VBox root;
         final Label state = new Label();
+        final Label live = new Label("●");
+        private String liveText = "";
         final ProgressBar humidity = new ProgressBar(0);
-        final Label humidityText = new Label("humidité : inconnue (aucun snapshot)");
+        final Label humidityText = new Label("humidité : en attente du nœud…");
         final ProgressBar quota = new ProgressBar(1);
         final Label quotaText = new Label();
         final Label stats = new Label();
@@ -367,7 +396,8 @@ public class DashboardApp extends Application {
             name.setStyle("-fx-font-size: 15px; -fx-font-weight: bold;");
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-            HBox top = new HBox(8, name, spacer, state);
+            live.setStyle("-fx-font-size: 13px; -fx-text-fill: #9ca3af;");
+            HBox top = new HBox(6, live, name, spacer, state);   // voyant de présence devant le nom
             top.setAlignment(Pos.CENTER_LEFT);
             for (ProgressBar bar : List.of(humidity, quota)) {
                 bar.setMaxWidth(Double.MAX_VALUE);
@@ -377,19 +407,43 @@ public class DashboardApp extends Application {
             humidity.setStyle("-fx-accent: #0891b2;");
             quota.setStyle("-fx-accent: #7c3aed;");
             root = card(null, top, humidityText, humidity, quotaText, quota, stats);
+            root.setMinWidth(170);
         }
 
         void show(DashboardModel.FarmerView f) {
             state.setText(f.pumpState());
             state.setStyle("-fx-text-fill: white; -fx-font-weight: bold; -fx-padding: 2 8 2 8; -fx-background-radius: 10;"
                     + " -fx-background-color: " + STATE_COLORS.getOrDefault(f.pumpState(), "#6b7280") + ";");
+            String text;
+            switch (f.liveness()) {
+                case "ONLINE" -> {
+                    text = "en ligne";
+                    live.setStyle("-fx-font-size: 13px; -fx-text-fill: #16a34a;");
+                    root.setOpacity(1.0);
+                }
+                case "OFFLINE" -> {
+                    text = "hors ligne : aucun signal du nœud depuis plus de "
+                            + DashboardModel.OFFLINE_AFTER_MS / 1000 + " s";
+                    live.setStyle("-fx-font-size: 13px; -fx-text-fill: #dc2626;");
+                    root.setOpacity(0.6);
+                }
+                default -> {
+                    text = "en attente d'un signal de ce nœud";
+                    live.setStyle("-fx-font-size: 13px; -fx-text-fill: #9ca3af;");
+                }
+            }
+            if (!text.equals(liveText)) {                        // une infobulle par changement, pas toutes les 400 ms
+                liveText = text;
+                live.setTooltip(new javafx.scene.control.Tooltip(text));
+            }
             if (f.humidity() != null) {
                 humidity.setProgress(f.humidity() / 100.0);
-                humidityText.setText(String.format(Locale.ROOT, "humidité : %.1f %%  (snapshot)", f.humidity()));
+                humidityText.setText(String.format(Locale.ROOT, "humidité : %.1f %%", f.humidity()));
             }
             quota.setProgress((double) f.quota() / Config.QUOTA_INITIAL);
             quotaText.setText("quota : " + f.quota() + " / " + Config.QUOTA_INITIAL + " L");
-            stats.setText("demandes " + f.requests() + "  ·  accès " + f.entries()
+            stats.setText((f.liveness().equals("OFFLINE") ? "hors ligne  ·  " : "") + "demandes " + f.requests()
+                    + "  ·  accès " + f.entries()
                     + (f.lastRequestLamport() >= 0 ? "  ·  H=" + f.lastRequestLamport() : ""));
             stats.setStyle("-fx-text-fill: #4b5563;");
         }

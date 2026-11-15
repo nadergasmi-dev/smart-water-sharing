@@ -9,13 +9,16 @@ import com.smartwater.communication.Message;
 import com.smartwater.communication.MessageListener;
 import com.smartwater.communication.MessageSender;
 import com.smartwater.communication.MessageType;
+import com.smartwater.node.NodeStatus;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -39,7 +42,7 @@ public class LedgerReplicator implements MessageListener {
 
     /** Types à inscrire auprès du MessageHandler : {@code handler.register(replicator, LedgerReplicator.TYPES)}. */
     public static final MessageType[] TYPES = {
-            MessageType.LEDGER_UPDATE, MessageType.LEDGER_REQUEST, MessageType.LEDGER_SYNC };
+            MessageType.LEDGER_UPDATE, MessageType.LEDGER_REQUEST, MessageType.LEDGER_SYNC, MessageType.NODE_STATUS };
 
     /** Dernier état connu de la copie d'un autre nœud : longueur et hash du dernier bloc. */
     public record PeerHead(String nodeId, int length, String lastHash, long time) { }
@@ -130,6 +133,7 @@ public class LedgerReplicator implements MessageListener {
             case LEDGER_UPDATE -> onUpdate(m);
             case LEDGER_REQUEST -> onRequest(m);
             case LEDGER_SYNC -> onSync(m);
+            case NODE_STATUS -> onStatus(m);
             default -> { }   // types non concernés
         }
     }
@@ -230,8 +234,49 @@ public class LedgerReplicator implements MessageListener {
         }
     }
 
+    /**
+     * Balise d'état {@code NODE_STATUS} d'un nœud : sa longueur et son dernier hash mettent à jour ce que l'on sait
+     * de sa copie. Un réplicateur <b>passif</b> (dashboard, qui ne peut rien demander) recopie en plus les blocs qu'il
+     * n'a pas : chaque bloc repasse par les 7 règles, comme pour un LEDGER_SYNC. Un nœud <b>actif</b> ne recopie rien :
+     * si la copie de l'autre est plus longue, il demande un rattrapage (au plus une demande identique toutes les 2 s).
+     */
+    private void onStatus(Message m) {
+        NodeStatus status;
+        try {
+            status = NodeStatus.fromPayload(m.getPayload());
+        } catch (IllegalArgumentException e) {
+            report(true, m.getFrom(), -1, e.getMessage());
+            return;
+        }
+        List<Block> blocks = status.blocks();
+        int length = blocks.size() + 1;                                       // + genesis, jamais envoyé
+        String lastHash = blocks.isEmpty() ? ledger.getChain().get(0).getHash() : blocks.get(blocks.size() - 1).getHash();
+        peerHeads.put(m.getFrom(), new PeerHead(m.getFrom(), length, lastHash, System.currentTimeMillis()));
+
+        int mine = ledger.getChain().size();
+        if (sender != null) {
+            if (length > mine) {
+                log(m.getFrom() + " annonce " + length + " blocs, j'en ai " + mine + " : rattrapage");
+                requestSyncIfUseful();
+            }
+            return;
+        }
+        for (Block b : blocks) {                                              // observateur passif
+            if (b.getIndex() >= mine || b.getIndex() == mine - 1) {          // nouveaux blocs, + le dernier pour déceler une fourche
+                if (integrate(m.getFrom(), b, true) == Outcome.REFUSED) {
+                    return;                                                   // la suite ne pourrait pas s'enchaîner
+                }
+            }
+        }
+    }
+
     /** Tente d'ajouter un bloc reçu ; ne lève jamais d'exception. */
     private Outcome integrate(String from, Block b) {
+        return integrate(from, b, false);
+    }
+
+    /** @param once true : une même alerte n'est signalée qu'une fois (balises périodiques : pas d'inondation) */
+    private Outcome integrate(String from, Block b, boolean once) {
         List<Block> chain = ledger.getChain();
         int size = chain.size();
         if (b.getIndex() >= 0 && b.getIndex() < size) {
@@ -239,7 +284,7 @@ public class LedgerReplicator implements MessageListener {
             if (Objects.equals(mine.getHash(), b.getHash())) {
                 return Outcome.ALREADY_PRESENT;   // doublon (ex. reçu par un UPDATE et par un SYNC)
             }
-            report(from, b.getIndex(), "fourche : bloc différent du mien à l'index " + b.getIndex()
+            report(once, from, b.getIndex(), "fourche : bloc différent du mien à l'index " + b.getIndex()
                     + " (le mien " + Block.shortHash(mine.getHash()) + ", reçu " + Block.shortHash(b.getHash()) + ")");
             return Outcome.REFUSED;
         }
@@ -250,7 +295,7 @@ public class LedgerReplicator implements MessageListener {
             ledger.acceptBlock(b);   // V1 à V7
             return Outcome.ADDED;
         } catch (InvalidBlockException e) {
-            report(from, b.getIndex(), e.getMessage());
+            report(once, from, b.getIndex(), e.getMessage());
             return Outcome.REFUSED;
         }
     }
@@ -285,6 +330,19 @@ public class LedgerReplicator implements MessageListener {
     private void rememberHead(String peer, Block b) {
         peerHeads.merge(peer, new PeerHead(peer, b.getIndex() + 1, b.getHash(), System.currentTimeMillis()),
                 (old, neu) -> neu.length() >= old.length() ? neu : old);
+    }
+
+    private final Set<String> reportedOnce = new HashSet<>();
+
+    private void report(boolean once, String peer, int index, String reason) {
+        if (once) {
+            synchronized (this) {
+                if (!reportedOnce.add(peer + "|" + index + "|" + reason)) {
+                    return;
+                }
+            }
+        }
+        report(peer, index, reason);
     }
 
     private synchronized void report(String peer, int index, String reason) {

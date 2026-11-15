@@ -229,7 +229,11 @@ public class NodeMqttClient implements MessageSender {
             return;
         }
 
-        System.out.println("[" + nodeId + "] reçu sur " + topic + " : " + m);
+        if (m.getType() != MessageType.NODE_STATUS) {      // les balises (chaîne complète) inonderaient la console
+            String text = String.valueOf(m);
+            System.out.println("[" + nodeId + "] reçu sur " + topic + " : "
+                    + (text.length() > 220 ? text.substring(0, 220) + "…" : text));
+        }
         java.util.function.Consumer<Message> h = incomingHandler;
         if (h != null) h.accept(m);
     }

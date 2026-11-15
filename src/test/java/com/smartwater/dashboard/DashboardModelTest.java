@@ -178,15 +178,17 @@ class DashboardModelTest {
 
     @Test
     void journalDecritChaqueTypeDeMessage() {
-        for (MessageType t : MessageType.values()) {
+        // les balises d'état (NODE_STATUS) sont de la supervision : jamais dans le journal (voir balisesNeSontPasAuJournal)
+        List<MessageType> shown = java.util.Arrays.stream(MessageType.values())
+                .filter(t -> t != MessageType.NODE_STATUS).toList();
+        for (MessageType t : shown) {
             model.accept(msg(t, "A", Message.ALL, 1, new JsonObject()));
         }
         DashboardModel.View v = model.view();
-        assertEquals(MessageType.values().length, v.messages());
-        assertEquals(MessageType.values().length, v.events().size());
+        assertEquals(shown.size(), v.messages());
+        assertEquals(shown.size(), v.events().size());
         v.events().forEach(e -> assertFalse(e.text().isBlank()));
-        MessageType[] all = MessageType.values();
-        assertEquals(all[all.length - 1].name(), v.events().get(0).type(), "le plus récent en premier");
+        assertEquals(shown.get(shown.size() - 1).name(), v.events().get(0).type(), "le plus récent en premier");
     }
 
     @Test

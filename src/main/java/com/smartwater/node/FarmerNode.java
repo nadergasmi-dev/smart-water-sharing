@@ -1,5 +1,6 @@
 package com.smartwater.node;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.smartwater.Config;
 import com.smartwater.algorithms.RicartAgrawala;
@@ -107,6 +108,24 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         rt.handler().register(ra, RicartAgrawala.TYPES);
         rt.handler().register(this, MessageType.IRRIGATION_EVENT);
         this.sequence = rt.irrigationSequence(ra);
+        rt.setStatsSupplier(this::statsJson);          // compteurs joints à chaque balise d'état (supervision)
+    }
+
+    /**
+     * Compteurs propres au nœud, joints aux balises d'état {@code NODE_STATUS} : le dashboard les affiche tels quels
+     * (il ne peut pas les déduire s'il démarre après le nœud). Appelée sous le verrou du client MQTT.
+     */
+    private JsonObject statsJson() {
+        RicartAgrawala.View v = ra.view();
+        JsonObject o = new JsonObject();
+        o.addProperty("requests", state.getRequests());
+        o.addProperty("irrigations", state.getIrrigations());
+        o.addProperty("entries", ra.getEntries());
+        o.addProperty("requestLamport", v.requestTimestamp());
+        JsonArray awaiting = new JsonArray();
+        v.awaitingReplies().forEach(awaiting::add);
+        o.add("awaiting", awaiting);
+        return o;
     }
 
     // ------------------------------------------------------------------ cycle de vie

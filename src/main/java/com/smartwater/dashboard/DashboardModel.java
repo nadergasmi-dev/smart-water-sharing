@@ -12,6 +12,7 @@ import com.smartwater.blockchain.RejectedBlock;
 import com.smartwater.communication.Message;
 import com.smartwater.communication.MessageType;
 import com.smartwater.node.LocalState;
+import com.smartwater.node.NodeStatus;
 import com.smartwater.security.BlockSigner;
 import com.smartwater.security.KeyGenerator;
 import com.smartwater.snapshot.GlobalSnapshot;
@@ -21,6 +22,7 @@ import java.nio.file.Path;
 import java.security.PublicKey;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -44,7 +46,12 @@ import java.util.function.Consumer;
  *       passif ; elle revalide chaque bloc (V1 à V7) et garde les blocs refusés avec la raison.</li>
  *   <li><b>Quotas et réservoir</b> : recalculés depuis cette copie (la chaîne fait foi).</li>
  *   <li><b>Snapshot</b> : état global assemblé par {@link ChandyLamport#observer()} à partir des
- *       {@code SNAPSHOT_STATE} ; c'est aussi la seule source de l'humidité des parcelles.</li>
+ *       {@code SNAPSHOT_STATE}.</li>
+ *   <li><b>Balises d'état</b> ({@code NODE_STATUS}, une par nœud et par seconde) : l'état <i>réel</i> de chaque
+ *       nœud (pompe, humidité, quota, compteurs) et sa chaîne complète. Elles rendent le dashboard exact même
+ *       lancé en retard (il n'a aucun historique, MQTT n'en garde pas) : le registre se complète, et la
+ *       reconstitution de la pompe, qui compte des messages, est <b>recalée</b> sur l'état annoncé. Elles ne sont
+ *       pas affichées dans le journal.</li>
  * </ul>
  *
  * @author Houssine Ferjani (Binôme 2)
@@ -53,10 +60,13 @@ public class DashboardModel implements Consumer<Message> {
 
     /** Nombre d'événements gardés pour le journal. */
     public static final int MAX_EVENTS = 300;
+    /** Nombre maximal de blocs refusés affichés. */
+    public static final int MAX_REJECTED = 100;
 
+    /** @param liveness {@code UNKNOWN} (rien reçu), {@code ONLINE} (signal récent) ou {@code OFFLINE} (silence) */
     public record FarmerView(String nodeId, String pumpState, long requests, long entries, int lastRequestLamport,
                              int quota, int litersUsed, Double humidity, String snapshotPumpState,
-                             long lastSeen) { }
+                             long lastSeen, String liveness) { }
 
     public record BlockView(int index, long timestamp, String nodeId, int liters, int quotaRemaining,
                             String hash, String previousHash, Boolean signatureOk) { }
@@ -66,7 +76,7 @@ public class DashboardModel implements Consumer<Message> {
     public record View(List<FarmerView> farmers, int reservoir, int capacity, List<String> holders,
                        List<String> waiting, List<BlockView> chain, boolean chainValid, List<RejectedBlock> rejected,
                        Map<String, LedgerReplicator.PeerHead> peerHeads, List<LedgerReplicator.Divergence> divergences,
-                       GlobalSnapshot snapshot, List<EventView> events, long messages) {
+                       GlobalSnapshot snapshot, List<EventView> events, long messages, long beacons) {
 
         /** Plus d'un nœud tient la pompe d'après les messages : exclusion mutuelle violée. */
         public boolean mutualExclusionViolated() {
@@ -81,7 +91,14 @@ public class DashboardModel implements Consumer<Message> {
         long repliesReceived;
         int lastRequestLamport = -1;
         long lastSeen;
+        NodeStatus status;           // dernière balise d'état reçue (null : aucune)
+        long statusAt;
+        long requestsSinceBeacon;    // observés depuis la dernière balise : la balise a jusqu'à 1 s de retard
+        long releasesSinceBeacon;
     }
+
+    /** Au-delà de ce silence (ni message ni balise), un nœud est considéré hors ligne. */
+    static final long OFFLINE_AFTER_MS = Math.max(3000, Config.STATUS_PERIOD_MS * 4);
 
     private final List<String> nodes;
     private final Blockchain ledger;
@@ -92,6 +109,7 @@ public class DashboardModel implements Consumer<Message> {
     private final Map<String, PumpCounters> counters = new LinkedHashMap<>();
     private final Deque<EventView> events = new ArrayDeque<>();
     private long messages;
+    private long beacons;
 
     /** Clés publiques de {@code keys/}. */
     public DashboardModel() {
@@ -117,9 +135,15 @@ public class DashboardModel implements Consumer<Message> {
         }
         // Registre et snapshot : objets de Binôme 1, synchronisés de leur côté
         switch (m.getType()) {
-            case LEDGER_UPDATE, LEDGER_REQUEST, LEDGER_SYNC -> safely(() -> replicator.onMessage(m));
+            case LEDGER_UPDATE, LEDGER_REQUEST, LEDGER_SYNC, NODE_STATUS -> safely(() -> replicator.onMessage(m));
             case SNAPSHOT_STATE, MARKER -> safely(() -> snapshot.onMessage(m));
             default -> { }
+        }
+        if (m.getType() == MessageType.NODE_STATUS) {          // supervision : ni journal, ni compteur de messages
+            synchronized (this) {
+                onBeacon(m);
+            }
+            return;
         }
         synchronized (this) {
             messages++;
@@ -129,9 +153,13 @@ public class DashboardModel implements Consumer<Message> {
                 switch (m.getType()) {
                     case REQUEST -> {
                         c.requests++;
+                        c.requestsSinceBeacon++;
                         c.lastRequestLamport = m.getLamport();
                     }
-                    case RELEASE -> c.releases++;
+                    case RELEASE -> {
+                        c.releases++;
+                        c.releasesSinceBeacon++;
+                    }
                     case REPLY -> {
                         PumpCounters target = counters.get(m.getTo());
                         if (target != null) {
@@ -154,6 +182,62 @@ public class DashboardModel implements Consumer<Message> {
             r.run();
         } catch (RuntimeException e) {
             System.err.println("[DASHBOARD] message ignoré : " + e.getMessage());
+        }
+    }
+
+    /** Balise d'état : mémorise l'état réel du nœud et recale la reconstitution de la pompe dessus. */
+    private void onBeacon(Message m) {
+        PumpCounters c = counters.get(m.getFrom());
+        if (c == null) {
+            return;
+        }
+        NodeStatus st;
+        try {
+            st = NodeStatus.fromPayload(m.getPayload());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        if (!m.getFrom().equals(st.local().nodeId())) {
+            return;                                              // balise publiée au nom d'un autre nœud
+        }
+        c.status = st;
+        c.statusAt = System.currentTimeMillis();
+        c.requestsSinceBeacon = 0;
+        c.releasesSinceBeacon = 0;
+        beacons++;
+        rebase(c, st);
+    }
+
+    /**
+     * Recale les compteurs Ricart-Agrawala sur l'état annoncé par le nœud. Sans cela, un dashboard lancé en retard
+     * (qui a raté des REQUEST ou des RELEASE) resterait décalé d'un cran pour toujours. Les compteurs sont remis dans
+     * un état cohérent avec l'état réel ; les messages suivants les font ensuite évoluer en direct, et la balise
+     * suivante corrige tout écart transitoire (messages arrivés par des topics différents).
+     */
+    private void rebase(PumpCounters c, NodeStatus st) {
+        int peers = Math.max(1, nodes.size() - 1);
+        long cycles = c.releases;                                // cycles complets déjà derrière nous
+        switch (st.local().pumpState()) {
+            case "RELEASED" -> {
+                c.requests = cycles;
+                c.repliesReceived = cycles * peers;
+            }
+            case "WANTED" -> {
+                int missing = Math.max(1, Math.min(peers, st.awaiting().size()));
+                c.requests = cycles + 1;
+                c.repliesReceived = cycles * peers + (peers - missing);
+            }
+            case "HELD" -> {
+                c.requests = cycles + 1;
+                c.repliesReceived = c.requests * peers;
+            }
+            default -> {
+                return;
+            }
+        }
+        long lamport = st.stat("requestLamport", -1);
+        if (lamport >= 0 && !st.local().pumpState().equals("RELEASED")) {
+            c.lastRequestLamport = (int) lamport;
         }
     }
 
@@ -185,6 +269,7 @@ public class DashboardModel implements Consumer<Message> {
                 wanting.add(new String[] {id, String.valueOf(c.lastRequestLamport)});
             }
             long entries = Math.min(c.requests, c.repliesReceived / Math.max(1, nodes.size() - 1));
+            long requests = c.requests;
             int quota = ledger.getQuota(id);
             Double humidity = null;
             String snapPump = null;
@@ -193,8 +278,17 @@ public class DashboardModel implements Consumer<Message> {
                 humidity = ls.humidity();
                 snapPump = ls.pumpState();
             }
-            farmers.add(new FarmerView(id, state, c.requests, entries, c.lastRequestLamport, quota,
-                    Config.QUOTA_INITIAL - quota, humidity, snapPump, c.lastSeen));
+            if (c.status != null) {                              // la balise est plus récente et fait foi
+                humidity = c.status.local().humidity();
+                // valeur annoncée + ce qui s'est passé depuis (chaque cycle complet se termine par un RELEASE)
+                requests = c.status.stat("requests", requests) + c.requestsSinceBeacon;
+                entries = c.status.stat("entries", entries) + c.releasesSinceBeacon;
+            }
+            long signal = Math.max(c.statusAt, c.lastSeen);
+            String liveness = signal == 0 ? "UNKNOWN"
+                    : System.currentTimeMillis() - signal <= OFFLINE_AFTER_MS ? "ONLINE" : "OFFLINE";
+            farmers.add(new FarmerView(id, state, requests, entries, c.lastRequestLamport, quota,
+                    Config.QUOTA_INITIAL - quota, humidity, snapPump, signal, liveness));
         }
         // File d'attente dans l'ordre de priorité de Ricart-Agrawala : (estampille, identifiant)
         wanting.sort((a, b) -> LamportClock.compare(Integer.parseInt(a[1]), a[0], Integer.parseInt(b[1]), b[0]));
@@ -206,8 +300,34 @@ public class DashboardModel implements Consumer<Message> {
                     b.getQuotaRemaining(), b.getHash(), b.getPreviousHash(), signatureOk(b)));
         }
         return new View(farmers, ledger.getReservoirRemaining(), Config.RESERVOIR_INITIAL, holders, waiting,
-                chain, ledger.validate(), ledger.getRejected(), Map.copyOf(replicator.getPeerHeads()),
-                replicator.getDivergences(), snap, List.copyOf(events), messages);
+                chain, ledger.validate(), allRejected(), Map.copyOf(replicator.getPeerHeads()),
+                replicator.getDivergences(), snap, List.copyOf(events), messages, beacons);
+    }
+
+    /**
+     * Blocs refusés : ceux que ce dashboard a lui-même refusés en direct, plus ceux que les nœuds annoncent dans
+     * leurs balises (refus passés, qu'un dashboard lancé après coup n'a pas pu voir). Un même bloc refusé pour la
+     * même raison, annoncé par plusieurs nœuds ou déjà vu en direct, n'apparaît qu'une fois.
+     */
+    private List<RejectedBlock> allRejected() {
+        Map<String, RejectedBlock> merged = new LinkedHashMap<>();
+        for (RejectedBlock r : ledger.getRejected()) {
+            merged.putIfAbsent(rejectedKey(r), r);
+        }
+        for (PumpCounters c : counters.values()) {
+            if (c.status != null) {
+                for (RejectedBlock r : c.status.rejected()) {
+                    merged.putIfAbsent(rejectedKey(r), r);
+                }
+            }
+        }
+        List<RejectedBlock> all = new ArrayList<>(merged.values());
+        all.sort(Comparator.comparingLong(RejectedBlock::time));
+        return all.size() > MAX_REJECTED ? all.subList(all.size() - MAX_REJECTED, all.size()) : all;
+    }
+
+    private static String rejectedKey(RejectedBlock r) {
+        return r.block().getNodeId() + "|" + r.block().getIndex() + "|" + r.block().getHash() + "|" + r.reason();
     }
 
     /** ✓ / ✗ de la signature ; {@code null} pour le genesis (non signé). Résultat mis en cache par hash. */
@@ -245,6 +365,7 @@ public class DashboardModel implements Consumer<Message> {
             }
             case MARKER -> "marqueur du snapshot " + str(p, "snapshotId");
             case SNAPSHOT_STATE -> "état local pour le snapshot " + str(p, "snapshotId");
+            case NODE_STATUS -> "balise d'état";
         };
     }
 
