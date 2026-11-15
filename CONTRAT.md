@@ -1,6 +1,10 @@
 # CONTRAT D'INTERFACE — Smart Water Sharing
 
-**Version 3.4** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3) + intégration de la séquence d'irrigation (v3.4). À valider par Binôme 1 et Binôme 2.
+**Version 3.5** — sécurisation du registre et du broker (v3.0) + un topic MQTT par expéditeur (v3.1) + rattrapage du registre (v3.2) + snapshot global (v3.3) + intégration de la séquence d'irrigation (v3.4) + verrou de cohérence du snapshot et seuil d'humidité (v3.5). À valider par Binôme 1 et Binôme 2.
+
+**Changements de la version 3.5 par rapport à la 3.4 (retours de Binôme 2) :**
+- **Verrou de cohérence du snapshot** : dans `IrrigationSequence`, « bloc → compteurs → `IRRIGATION_EVENT` → `LEDGER_UPDATE` » se fait d'un seul bloc, sous le verrou du client MQTT, le même que celui de Chandy-Lamport. Un snapshot ne voit jamais un registre à jour avec des compteurs pas encore mis à jour (section 8). **Règle d'ordre des verrous** pour Binôme 2 (section 7).
+- **Seuil d'humidité** : 30 %, dans `Config.HUMIDITY_THRESHOLD` (point ouvert tranché, section 11).
 
 **Changements de la version 3.4 par rapport à la 3.3 (intégration) :**
 - La séquence de la section 8 est codée une fois pour toutes dans `IrrigationSequence` (Binôme 1) ; Binôme 2 fournit la pompe (`PumpAccess`), l'allocation et la mise à jour de ses compteurs (section 7).
@@ -325,6 +329,7 @@ public final class Config {
     public static final int    RESERVOIR_INITIAL = 1000;   // litres
     public static final int    QUOTA_INITIAL     = 200;    // litres par agriculteur
     public static final String KEYS_DIR          = "keys";
+    public static final int    HUMIDITY_THRESHOLD = 30;    // % : en dessous, le nœud demande à irriguer
     /** Mot de passe MQTT d'un client (A, B, C, DASHBOARD), lu depuis une variable
      *  d'environnement ou un fichier local non commité. */
     public static String mqttPassword(String clientId);
@@ -433,6 +438,10 @@ public class LedgerReplicator implements MessageListener {
 public interface LocalStateProvider {
     /** Copie cohérente de l'état local ; appelée sur le thread du MessageHandler, entre deux messages. */
     LocalState getLocalState();
+    // Appelée sous le verrou du client MQTT (enregistrement de l'état + MARKER d'un seul bloc).
+    // RÈGLE D'ORDRE DES VERROUS : si l'état est protégé par un verrou propre à Binôme 2, toujours prendre
+    // le client MQTT EN PREMIER, puis ce verrou ; jamais l'inverse (sinon interblocage possible).
+    // Le plus simple : getLocalState() renvoie une copie sans attendre de verrou.
 }
 // PROPOSITION de Binôme 1, à valider par Binôme 2 (qui peut ajouter des champs) :
 public record LocalState(String nodeId, double humidity, int quotaRemaining,
@@ -480,6 +489,8 @@ Dans la section critique, dans cet ordre :
 
 Le bloc est diffusé **avant** les `REPLY` différés, pour que le nœud suivant ait un registre à jour avant de créer son propre bloc. Comme le `LEDGER_UPDATE` et le `REPLY` partent sur le **même topic** (`water/from/{id}`), le nœud suivant traite toujours le bloc avant l'autorisation d'entrer (ordre FIFO). `releasePump()` est appelé dans **tous** les cas, y compris si une exception est levée.
 
+**Verrou de cohérence du snapshot :** les étapes 3 (bloc) à 5 (diffusion) s'exécutent d'un seul bloc, sous le verrou du client MQTT, le même que celui utilisé par Chandy-Lamport pour enregistrer l'état et envoyer le `MARKER`. Un snapshot tombe donc avant ou après une irrigation, jamais au milieu. `Listener.onIrrigated` est appelé sous ce verrou : il doit rester court.
+
 Cette séquence est implémentée par `IrrigationSequence` (section 7).
 
 ---
@@ -518,7 +529,7 @@ attribué = min(besoin, quotaRestant, réservoirDisponible)
 - [x] ~~Rattrapage d'un nœud en retard~~ → **décidé en v3.2 : ajouté** (`LEDGER_REQUEST` / `LEDGER_SYNC`, section 4.2). Le nœud en retard ajoute les blocs manquants un par un, chacun revalidé par les 7 règles. Une fourche (deux versions valides) est **signalée** mais pas départagée : pas de vote à la majorité, ce n'est pas un consensus.
 - [x] ~~Ordre entre topics~~ → **décidé en v3.1 (Binôme 1)** : un topic unique par expéditeur `water/from/{id}`, destinataire filtré sur `to` à la réception. L'ACL (règles par nom d'utilisateur) interdit d'écrire sous le nom d'un autre : le champ `from` ne peut plus être usurpé et l'ordre d'un même expéditeur est préservé.
 - [ ] TLS sur le broker (port 8883) : activé ou laissé hors périmètre (tout tourne en local).
-- [ ] Seuil d'humidité.
+- [x] ~~Seuil d'humidité~~ → **décidé en v3.5 : 30 %** (proposé par Binôme 2), dans `Config.HUMIDITY_THRESHOLD`.
 - [ ] Contenu de `LocalState` et format de `GlobalSnapshot` : **proposés par Binôme 1 en v3.3** (section 7), à valider par Binôme 2 (qui peut ajouter des champs à `LocalState`).
 
 ---

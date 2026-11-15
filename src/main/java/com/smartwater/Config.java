@@ -26,6 +26,8 @@ public final class Config {
     public static final int QUOTA_INITIAL = 200;
     /** Dossier des clés de signature, relatif à la racine du projet. */
     public static final String KEYS_DIR = "keys";
+    /** Seuil d'humidité du sol (en %) : en dessous, un nœud demande à irriguer (proposé par Binôme 2). */
+    public static final int HUMIDITY_THRESHOLD = 30;
 
     /** Nœuds agriculteurs (contrat, section 1). Chacun possède une paire de clés. */
     public static final List<String> NODE_IDS = List.of("A", "B", "C");

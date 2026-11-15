@@ -21,6 +21,7 @@ class ConfigTest {
         assertEquals(1000, Config.RESERVOIR_INITIAL);
         assertEquals(200, Config.QUOTA_INITIAL);
         assertEquals("keys", Config.KEYS_DIR);
+        assertEquals(30, Config.HUMIDITY_THRESHOLD);
         assertEquals(Map.of("A", 200, "B", 200, "C", 200), Config.initialQuotas());
     }
 

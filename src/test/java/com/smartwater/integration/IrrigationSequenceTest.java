@@ -114,6 +114,30 @@ class IrrigationSequenceTest {
     }
 
     @Test
+    void aSnapshotCannotSlipBetweenTheBlockAndTheCounters() throws Exception {
+        List<String> order = java.util.Collections.synchronizedList(new ArrayList<>());
+        Thread[] snapshot = new Thread[1];
+        boolean[] lockHeld = new boolean[1];
+
+        sequence.irrigate((quota, reservoir) -> 40, new IrrigationSequence.Listener() {
+            @Override public void onIrrigated(Block b) {
+                lockHeld[0] = Thread.holdsLock(sender);
+                // un snapshot arrive pile maintenant : il prend le même verrou que Chandy-Lamport
+                snapshot[0] = new Thread(() -> { synchronized (sender) { order.add("snapshot"); } });
+                snapshot[0].start();
+                try { Thread.sleep(200); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                order.add("compteurs");
+            }
+        });
+        snapshot[0].join(2000);
+
+        assertTrue(lockHeld[0], "les compteurs sont mis à jour sous le verrou du client MQTT");
+        assertEquals(List.of("compteurs", "snapshot"), order,
+                "le snapshot attend la fin de l'irrigation, il ne voit jamais un état à moitié mis à jour");
+        assertTrue(trace.indexOf("publish LEDGER_UPDATE") >= 0);
+    }
+
+    @Test
     void pumpIsReleasedEvenIfTheAllocationThrows() {
         assertThrows(IllegalStateException.class, () -> sequence.irrigate((quota, reservoir) -> {
             throw new IllegalStateException("bug dans l'allocation");

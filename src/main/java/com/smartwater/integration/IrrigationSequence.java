@@ -37,7 +37,11 @@ public final class IrrigationSequence {
         int liters(int quotaRemaining, int reservoirRemaining);
     }
 
-    /** Réactions de Binôme 2 (compteurs, affichage). Toutes facultatives sauf {@link #onIrrigated}. */
+    /**
+     * Réactions de Binôme 2 (compteurs, affichage). Toutes facultatives sauf {@link #onIrrigated}.
+     * {@code onIrrigated} est appelé SOUS le verrou du client MQTT : il doit être court, et si Binôme 2 protège
+     * son état par son propre verrou, l'ordre doit toujours être « client MQTT puis son verrou » (jamais l'inverse).
+     */
     public interface Listener {
         /** Étape 5 : mettre à jour les compteurs (quota, réservoir) — appelé seulement si le bloc est accepté. */
         void onIrrigated(Block block);
@@ -87,23 +91,28 @@ public final class IrrigationSequence {
             }
 
             Block block;
-            try {
-                block = ledger.addBlock(nodeId, liters, quota - liters);
-            } catch (InvalidBlockException e) {
-                listener.onRefused(e.getMessage());
-                log("bloc REFUSÉ (" + e.getMessage() + ") : pas d'irrigation, compteurs inchangés");
-                return new Result(Outcome.REFUSED, liters, null, e.getMessage());
+            // Verrou de cohérence du snapshot : bloc + compteurs + événements d'un seul bloc, sous le MÊME verrou
+            // que Chandy-Lamport quand il enregistre l'état et envoie son MARKER (le client MQTT). Un snapshot
+            // tombe donc avant ou après l'irrigation, jamais au milieu (registre à jour mais compteurs pas encore).
+            synchronized (sender) {
+                try {
+                    block = ledger.addBlock(nodeId, liters, quota - liters);
+                } catch (InvalidBlockException e) {
+                    listener.onRefused(e.getMessage());
+                    log("bloc REFUSÉ (" + e.getMessage() + ") : pas d'irrigation, compteurs inchangés");
+                    return new Result(Outcome.REFUSED, liters, null, e.getMessage());
+                }
+
+                listener.onIrrigated(block);                              // compteurs, après le succès
+
+                JsonObject event = new JsonObject();                      // IRRIGATION_EVENT puis LEDGER_UPDATE
+                event.addProperty("txId", "T-" + nodeId + "-" + block.getIndex());
+                event.addProperty("liters", block.getLiters());
+                event.addProperty("quotaRemaining", block.getQuotaRemaining());
+                event.addProperty("reservoirLevel", ledger.getReservoirRemaining());
+                sender.publish(new Message(MessageType.IRRIGATION_EVENT, Message.ALL, event));
+                replicator.broadcast(block);
             }
-
-            listener.onIrrigated(block);                                  // compteurs, après le succès
-
-            JsonObject event = new JsonObject();                          // IRRIGATION_EVENT puis LEDGER_UPDATE
-            event.addProperty("txId", "T-" + nodeId + "-" + block.getIndex());
-            event.addProperty("liters", block.getLiters());
-            event.addProperty("quotaRemaining", block.getQuotaRemaining());
-            event.addProperty("reservoirLevel", ledger.getReservoirRemaining());
-            sender.publish(new Message(MessageType.IRRIGATION_EVENT, Message.ALL, event));
-            replicator.broadcast(block);
 
             log("irrigation de " + liters + " L (bloc " + block.getIndex() + ", quota restant "
                     + block.getQuotaRemaining() + " L)");
