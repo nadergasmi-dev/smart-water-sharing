@@ -1,13 +1,5 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
 package com.smartwater.communication;
 
-/**
- *
- * @author nader
- */
 import com.smartwater.algorithms.LamportClock;
 import com.smartwater.snapshot.SnapshotService;
 import java.util.concurrent.ExecutorService;
@@ -39,7 +31,7 @@ public class MessageHandler implements Consumer<Message> {
         this.snapshotService = s;
     }
 
-    /** Un module s'inscrit pour un ou plusieurs types de messages. */
+    // Un module s'inscrit pour un ou plusieurs types de messages
     public void register(MessageListener listener, MessageType... types) {
         synchronized (listeners) {
             for (MessageType t : types) {
@@ -48,7 +40,7 @@ public class MessageHandler implements Consumer<Message> {
         }
     }
 
-    /** Appelé par NodeMqttClient pour chaque message valide (ni propre, ni doublon). */
+    // Appelé par NodeMqttClient pour chaque message valide (ni propre, ni doublon)
     @Override
     public void accept(Message m) {
         executor.execute(() -> process(m));
@@ -89,10 +81,7 @@ public class MessageHandler implements Consumer<Message> {
         }
     }
 
-    /**
-     * Exécute une tâche sur le thread du handler, ENTRE deux messages (jamais au milieu du traitement
-     * d'un message). Utilisé par Chandy-Lamport pour démarrer un snapshot sur un état cohérent.
-     */
+    // Exécute une tâche sur le thread du handler
     public void execute(Runnable task) {
         executor.execute(task);
     }

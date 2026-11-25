@@ -4,11 +4,7 @@ import com.smartwater.security.BlockSigner;
 
 import java.security.PrivateKey;
 
-/**
- * Bloc immuable : aucun setter, tous les champs sont final (contrat, section 6.1).
- * Le hash couvre les 6 champs de données ; la signature couvre le hash.
- * Sérialisable tel quel avec Gson (champ {@code signature} inclus, pour {@code LEDGER_UPDATE}).
- */
+// Bloc immuable : aucun setter, tous les champs sont final
 public final class Block {
 
     private final int index;
@@ -20,7 +16,7 @@ public final class Block {
     private final String hash;
     private final String signature;   // Base64 ; null pour le Genesis
 
-    /** Constructeur complet (utilisé aussi pour un bloc reçu via MQTT). */
+    // Constructeur complet (utilisé aussi pour un bloc reçu via MQTT)
     public Block(int index, long timestamp, String nodeId, int liters,
                  int quotaRemaining, String previousHash, String hash, String signature) {
         this.index = index;
@@ -33,7 +29,7 @@ public final class Block {
         this.signature = signature;
     }
 
-    /** Crée un nouveau bloc local : calcule le hash puis le signe avec la clé privée du nœud. */
+    // Crée un nouveau bloc local : calcule le hash puis le signe avec la clé privée du nœud
     public static Block create(int index, long timestamp, String nodeId, int liters,
                                int quotaRemaining, String previousHash, PrivateKey privateKey) {
         String h = HashValidator.computeHash(index, timestamp, nodeId, liters, quotaRemaining, previousHash);
@@ -41,7 +37,7 @@ public final class Block {
         return new Block(index, timestamp, nodeId, liters, quotaRemaining, previousHash, h, sig);
     }
 
-    /** Bloc Genesis : identique sur A, B et C, non signé. */
+    // Bloc Genesis : identique sur A, B et C, non signé
     public static Block genesis() {
         String h = HashValidator.computeHash(0, 0L, "GENESIS", 0, 0, "0");
         return new Block(0, 0L, "GENESIS", 0, 0, "0", h, null);
@@ -56,7 +52,7 @@ public final class Block {
     public String getHash()          { return hash; }
     public String getSignature()     { return signature; }
 
-    /** Début d'un hash pour les logs ; tolère un hash absent (bloc mal formé reçu du réseau). */
+    // Début d'un hash pour les logs ; tolère un hash absent (bloc mal formé reçu du réseau)
     static String shortHash(String h) {
         if (h == null) return "null";
         return h.length() > 8 ? h.substring(0, 8) + "..." : h;

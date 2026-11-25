@@ -21,37 +21,21 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Réplication du registre entre les nœuds (contrat, section 4.2).
- *
- * <ul>
- *   <li>{@link #broadcast(Block)} : diffuse un bloc ajouté localement (LEDGER_UPDATE).</li>
- *   <li>Réception d'un LEDGER_UPDATE : le bloc repasse par les 7 règles ({@link Blockchain#acceptBlock}) ;
- *       refusé → <b>divergence signalée avec la raison</b>.</li>
- *   <li>Rattrapage : un nœud en retard (trou dans les index) envoie LEDGER_REQUEST ; les autres répondent
- *       par LEDGER_SYNC avec les blocs manquants, qui sont validés un par un avant d'être ajoutés.</li>
- * </ul>
- *
- * <b>Ce n'est pas un consensus</b> : les blocs invalides sont refusés, mais deux versions valides
- * concurrentes (fourche) sont seulement signalées, jamais départagées.
- *
- * Sans {@link MessageSender} (null), le réplicateur est <b>passif</b> (dashboard) : il suit le registre
- * à partir des messages qu'il voit passer, sans jamais rien envoyer.
- */
+// Réplication du registre entre les nœuds. broadcast
 public class LedgerReplicator implements MessageListener {
 
-    /** Types à inscrire auprès du MessageHandler : {@code handler.register(replicator, LedgerReplicator.TYPES)}. */
+    // Types à inscrire auprès du MessageHandler : handler.register(replicator, LedgerReplicator.TYPES)
     public static final MessageType[] TYPES = {
             MessageType.LEDGER_UPDATE, MessageType.LEDGER_REQUEST, MessageType.LEDGER_SYNC, MessageType.NODE_STATUS };
 
-    /** Dernier état connu de la copie d'un autre nœud : longueur et hash du dernier bloc. */
+    // Dernier état connu de la copie d'un autre nœud : longueur et hash du dernier bloc
     public record PeerHead(String nodeId, int length, String lastHash, long time) { }
 
-    /** Un bloc reçu qui n'a pas pu être ajouté, avec la raison (pour les logs et le dashboard). */
+    // Un bloc reçu qui n'a pas pu être ajouté, avec la raison (pour les logs et le dashboard)
     public record Divergence(String peer, int index, String reason, long time) { }
 
     private static final Gson GSON = new Gson();
-    /** Pas plus d'une demande de rattrapage identique toutes les 2 s (plusieurs blocs peuvent signaler le même trou). */
+    // Pas plus d'une demande de rattrapage identique toutes les 2 s (plusieurs blocs peuvent signaler le même trou)
     private static final long SYNC_RETRY_MS = 2000;
     private static final int MAX_DIVERGENCES = 1000;
 
@@ -66,23 +50,15 @@ public class LedgerReplicator implements MessageListener {
     private int lastSyncRequestFrom = -1;
     private long lastSyncRequestTime;
 
-    /**
-     * @param nodeId nom du nœud (pour les logs) ; « DASHBOARD » pour l'observateur
-     * @param sender transport ; {@code null} = réplicateur passif (n'envoie jamais rien)
-     */
     public LedgerReplicator(String nodeId, Blockchain ledger, MessageSender sender) {
         this.nodeId = nodeId;
         this.ledger = Objects.requireNonNull(ledger);
         this.sender = sender;
     }
 
-    // ---------------------------------------------------------------- envoi
+    // envoi
 
-    /**
-     * Diffuse un bloc créé localement (séquence d'irrigation, étape 5, après le succès de {@code addBlock}).
-     *
-     * @throws IllegalArgumentException si le bloc n'est pas dans le registre local (seul un ajout réussi est diffusé)
-     */
+    // Diffuse un bloc créé localement (séquence d'irrigation, étape 5, après le succès de addBlock)
     public void broadcast(Block block) {
         requireSender();
         List<Block> chain = ledger.getChain();
@@ -95,7 +71,7 @@ public class LedgerReplicator implements MessageListener {
         sender.publish(new Message(MessageType.LEDGER_UPDATE, Message.ALL, payload));
     }
 
-    /** Demande aux autres les blocs qui manquent (au démarrage d'un nœud, ou après une coupure). */
+    // Demande aux autres les blocs qui manquent (au démarrage d'un nœud, ou après une coupure)
     public void requestSync() {
         requireSender();
         List<Block> chain = ledger.getChain();
@@ -110,7 +86,7 @@ public class LedgerReplicator implements MessageListener {
         log("demande de rattrapage à partir de l'index " + chain.size());
     }
 
-    /** Demande de rattrapage automatique sur un trou, sans répéter la même demande en rafale. */
+    // Demande de rattrapage automatique sur un trou, sans répéter la même demande en rafale
     private void requestSyncIfUseful() {
         if (sender == null) {
             log("en retard, attente d'un LEDGER_SYNC (réplicateur passif)");
@@ -125,7 +101,7 @@ public class LedgerReplicator implements MessageListener {
         requestSync();
     }
 
-    // ---------------------------------------------------------------- réception
+    // réception
 
     @Override
     public void onMessage(Message m) {
@@ -234,12 +210,7 @@ public class LedgerReplicator implements MessageListener {
         }
     }
 
-    /**
-     * Balise d'état {@code NODE_STATUS} d'un nœud : sa longueur et son dernier hash mettent à jour ce que l'on sait
-     * de sa copie. Un réplicateur <b>passif</b> (dashboard, qui ne peut rien demander) recopie en plus les blocs qu'il
-     * n'a pas : chaque bloc repasse par les 7 règles, comme pour un LEDGER_SYNC. Un nœud <b>actif</b> ne recopie rien :
-     * si la copie de l'autre est plus longue, il demande un rattrapage (au plus une demande identique toutes les 2 s).
-     */
+    // Balise d'état NODE_STATUS d'un nœud
     private void onStatus(Message m) {
         NodeStatus status;
         try {
@@ -270,12 +241,11 @@ public class LedgerReplicator implements MessageListener {
         }
     }
 
-    /** Tente d'ajouter un bloc reçu ; ne lève jamais d'exception. */
+    // Tente d'ajouter un bloc reçu ; ne lève jamais d'exception
     private Outcome integrate(String from, Block b) {
         return integrate(from, b, false);
     }
 
-    /** @param once true : une même alerte n'est signalée qu'une fois (balises périodiques : pas d'inondation) */
     private Outcome integrate(String from, Block b, boolean once) {
         List<Block> chain = ledger.getChain();
         int size = chain.size();
@@ -300,19 +270,19 @@ public class LedgerReplicator implements MessageListener {
         }
     }
 
-    // ---------------------------------------------------------------- état de la réplication
+    // état de la réplication
 
-    /** Divergences constatées (blocs refusés, fourches, messages mal formés), les plus anciennes d'abord. */
+    // Divergences constatées (blocs refusés, fourches, messages mal formés), les plus anciennes d'abord
     public synchronized List<Divergence> getDivergences() {
         return Collections.unmodifiableList(new ArrayList<>(divergences));
     }
 
-    /** Dernier état connu (longueur, hash du dernier bloc) de la copie de chaque autre nœud. */
+    // Dernier état connu (longueur, hash du dernier bloc) de la copie de chaque autre nœud
     public Map<String, PeerHead> getPeerHeads() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(peerHeads));
     }
 
-    /** true si la dernière copie connue de {@code peer} a la même longueur et le même dernier hash que la nôtre. */
+    // true si la dernière copie connue de peer a la même longueur et le même dernier hash que la nôtre
     public boolean isInSyncWith(String peer) {
         PeerHead head = peerHeads.get(peer);
         if (head == null) return false;
@@ -325,7 +295,7 @@ public class LedgerReplicator implements MessageListener {
         return ledger;
     }
 
-    // ---------------------------------------------------------------- outils
+    // outils
 
     private void rememberHead(String peer, Block b) {
         peerHeads.merge(peer, new PeerHead(peer, b.getIndex() + 1, b.getHash(), System.currentTimeMillis()),

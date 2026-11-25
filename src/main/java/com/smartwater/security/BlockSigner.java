@@ -9,18 +9,14 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.util.Base64;
 
-/**
- * Signature numérique des blocs (ECDSA, courbe P-256, contrat section 6.2).
- * Chaque agriculteur garde sa clé privée ; les clés publiques sont connues de tous les nœuds.
- * Les paires de clés sont produites et chargées par {@link KeyGenerator}.
- */
+// Signature numérique des blocs (ECDSA, courbe P-256, contrat section 6.2)
 public final class BlockSigner {
 
     private static final String ALGO = "SHA256withECDSA";
 
     private BlockSigner() { }
 
-    /** Signe le hash du bloc (chaîne de 64 caractères hexa, UTF-8) ; résultat en Base64. */
+    // Signe le hash du bloc (chaîne de 64 caractères hexa, UTF-8) ; résultat en Base64
     public static String sign(String hash, PrivateKey privateKey) {
         try {
             Signature s = Signature.getInstance(ALGO);
@@ -32,7 +28,7 @@ public final class BlockSigner {
         }
     }
 
-    /** Vérifie que le bloc a bien été signé par le propriétaire de la clé publique. */
+    // Vérifie que le bloc a bien été signé par le propriétaire de la clé publique
     public static boolean verify(Block b, PublicKey publicKey) {
         if (b == null || b.getSignature() == null || b.getHash() == null || publicKey == null) {
             return false;

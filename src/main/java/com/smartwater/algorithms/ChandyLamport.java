@@ -23,24 +23,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
 
-/**
- * Snapshot global cohérent (Chandy-Lamport), contrat section 4.3.
- *
- * <ol>
- *   <li>L'initiateur enregistre son état local et diffuse un MARKER.</li>
- *   <li>Au <b>premier</b> MARKER reçu, un nœud enregistre son état, diffuse un MARKER, et commence à
- *       enregistrer ses canaux entrants (sauf celui d'où vient ce MARKER, vide par définition).</li>
- *   <li>Chaque MARKER suivant arrête l'enregistrement du canal d'où il vient.</li>
- *   <li>Un nœud a fini quand il a reçu un MARKER de chaque autre nœud ; il diffuse alors son instantané
- *       local (SNAPSHOT_STATE). L'état global est complet quand les 3 instantanés locaux sont connus.</li>
- * </ol>
- *
- * Hypothèse : canaux FIFO, garantis par un topic MQTT par expéditeur (contrat v3.1).
- * Un seul snapshot à la fois : un MARKER d'un autre snapshot reçu pendant qu'un snapshot est en cours est ignoré.
- *
- * Tous les messages sont traités sur le thread unique du MessageHandler ; {@link #startSnapshot()} passe
- * aussi par ce thread (Executor fourni), pour ne jamais enregistrer l'état au milieu d'un message.
- */
+// Snapshot global cohérent (Chandy-Lamport), contrat section 4.3
 public class ChandyLamport implements SnapshotService {
 
     private static final Gson GSON = new Gson();
@@ -54,7 +37,7 @@ public class ChandyLamport implements SnapshotService {
     private final Executor executor;
 
     private int counter;
-    // ---- snapshot courant (accès sous verrou « this »)
+    // snapshot courant (accès sous verrou « this »)
     private String snapshotId;
     private String initiator;
     private LocalState recordedState;
@@ -67,12 +50,7 @@ public class ChandyLamport implements SnapshotService {
     private boolean localDone;
     private final Map<String, LocalSnapshot> collected = new LinkedHashMap<>();
 
-    /**
-     * Nœud participant.
-     *
-     * @param executor exécute une tâche entre deux messages : en production
-     *                 {@code messageHandler::execute} ; dans les tests {@code Runnable::run}
-     */
+    // Nœud participant
     public ChandyLamport(String nodeId, LocalStateProvider stateProvider, Ledger ledger,
                          MessageSender sender, Executor executor) {
         this.nodeId = Objects.requireNonNull(nodeId);
@@ -94,15 +72,12 @@ public class ChandyLamport implements SnapshotService {
         this.peers = List.of();
     }
 
-    /**
-     * Observateur (dashboard) : ne participe pas et n'envoie rien ; il assemble l'état global à partir des
-     * SNAPSHOT_STATE qu'il lit sur {@code water/from/+} (lui passer ces messages avec {@link #onMessage}).
-     */
+    // Observateur (dashboard)
     public static ChandyLamport observer() {
         return new ChandyLamport();
     }
 
-    // ---------------------------------------------------------------- déclenchement
+    // déclenchement
 
     @Override
     public void startSnapshot() {
@@ -121,7 +96,7 @@ public class ChandyLamport implements SnapshotService {
         });
     }
 
-    // ---------------------------------------------------------------- réception
+    // réception
 
     @Override
     public synchronized void onMessage(Message m) {
@@ -182,9 +157,9 @@ public class ChandyLamport implements SnapshotService {
         collected.put(local.nodeId(), local);
     }
 
-    // ---------------------------------------------------------------- étapes de l'algorithme
+    // étapes de l'algorithme
 
-    /** Enregistre l'état local, diffuse le MARKER, prépare l'enregistrement des canaux. */
+    // Enregistre l'état local, diffuse le MARKER, prépare l'enregistrement des canaux
     private void begin(String id, String init, String firstMarkerFrom) {
         snapshotId = id;
         initiator = init;
@@ -220,7 +195,7 @@ public class ChandyLamport implements SnapshotService {
                 + (firstMarkerFrom == null ? " (initiateur)" : " (1er MARKER reçu de " + firstMarkerFrom + ")"));
     }
 
-    /** Fin locale quand un MARKER a été reçu de chaque autre nœud : diffuse l'instantané local. */
+    // Fin locale quand un MARKER a été reçu de chaque autre nœud : diffuse l'instantané local
     private void finishLocalIfReady() {
         if (localDone || !markersFrom.containsAll(peers)) return;
         localDone = true;
@@ -238,7 +213,7 @@ public class ChandyLamport implements SnapshotService {
         log("snapshot " + snapshotId + " : terminé localement, " + inTransit + " message(s) en transit enregistré(s)");
     }
 
-    // ---------------------------------------------------------------- résultat
+    // résultat
 
     @Override
     public synchronized boolean isComplete() {
@@ -251,7 +226,7 @@ public class ChandyLamport implements SnapshotService {
         return new GlobalSnapshot(snapshotId, initiator, collected, allNodes);
     }
 
-    /** true quand CE nœud a fini sa partie (MARKER reçu de chaque autre nœud). */
+    // true quand CE nœud a fini sa partie (MARKER reçu de chaque autre nœud)
     public synchronized boolean isLocalComplete() {
         return localDone;
     }

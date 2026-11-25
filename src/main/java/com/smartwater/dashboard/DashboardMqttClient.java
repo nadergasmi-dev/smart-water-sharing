@@ -21,15 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
- * Client MQTT du dashboard : <b>lecture seule</b> (compte {@code DASHBOARD}, contrat section 2.1).
- *
- * <p>Il s'abonne à {@code water/from/+} et transmet <b>tous</b> les messages, y compris ceux adressés à un
- * seul nœud (les {@code REPLY} de Ricart-Agrawala) : contrairement à {@link NodeMqttClient}, il ne filtre
- * pas sur le champ {@code to}, car le dashboard observe tout. Il garde les contrôles de sécurité : un message
- * dont le champ {@code from} ne correspond pas au topic de publication est compté comme usurpation et jeté.</p>
- *
- * <p>Cette classe n'a <b>aucune</b> méthode de publication : l'ACL du broker l'interdirait de toute façon.</p>
- *
+ * Client MQTT du dashboard : lecture seule (compte DASHBOARD, contrat section 2.1)
  * @author Houssine Ferjani (Binôme 2)
  */
 public class DashboardMqttClient {
@@ -50,7 +42,7 @@ public class DashboardMqttClient {
     private volatile Consumer<String> onStatus = s -> { };
     private MqttClient client;
 
-    /** Broker et mot de passe de {@link Config} ; sans mot de passe configuré : connexion anonyme. */
+    // Broker et mot de passe de Config ; sans mot de passe configuré : connexion anonyme
     public DashboardMqttClient(Consumer<Message> consumer) {
         this(Config.BROKER_URL, passwordOrNull(), consumer);
     }
@@ -69,7 +61,7 @@ public class DashboardMqttClient {
         }
     }
 
-    /** Messages d'état de la connexion (pour la barre d'état de la fenêtre). */
+    // Messages d'état de la connexion (pour la barre d'état de la fenêtre)
     public void setStatusListener(Consumer<String> listener) {
         this.onStatus = listener == null ? s -> { } : listener;
     }
@@ -112,7 +104,7 @@ public class DashboardMqttClient {
         client.connect(opts);
     }
 
-    /** Réception brute, testable sans broker. */
+    // Réception brute, testable sans broker
     void onRaw(String topic, String json) {
         if (!topic.startsWith(NodeMqttClient.TOPIC_FROM_PREFIX)) {
             return;

@@ -10,19 +10,7 @@ import com.smartwater.blockchain.RejectedBlock;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Contenu d'une balise d'état {@code NODE_STATUS} (contrat, section 4.4) : ce qu'un nœud sait de lui-même à
- * un instant donné, pour la supervision.
- *
- * <ul>
- *   <li>{@code local} : {@link LocalState} (pompe, humidité, quota, REPLY différés), le même que pour Chandy-Lamport ;</li>
- *   <li>{@code stats} : compteurs propres au nœud (demandes, accès, estampille de la demande, REPLY attendus…) ;</li>
- *   <li>{@code blocks} : sa copie du registre <b>sans le genesis</b> (identique partout), de l'index 1 au dernier
- *       bloc : un observateur qui démarre en retard n'a ainsi rien à demander ;</li>
- *   <li>{@code rejected} : ses derniers blocs refusés, avec la raison : un refus est un événement passé, qu'un
- *       observateur lancé après coup ne peut pas voir autrement (tentatives de triche).</li>
- * </ul>
- */
+// Contenu d'une balise d'état NODE_STATUS
 public record NodeStatus(LocalState local, JsonObject stats, List<Block> blocks, List<RejectedBlock> rejected) {
 
     private static final Gson GSON = new Gson();
@@ -33,12 +21,12 @@ public record NodeStatus(LocalState local, JsonObject stats, List<Block> blocks,
         rejected = rejected == null ? List.of() : List.copyOf(rejected);
     }
 
-    /** Balise sans blocs refusés. */
+    // Balise sans blocs refusés
     public NodeStatus(LocalState local, JsonObject stats, List<Block> blocks) {
         this(local, stats, blocks, List.of());
     }
 
-    /** Charge utile du message {@code NODE_STATUS}. */
+    // Charge utile du message NODE_STATUS
     public JsonObject toPayload() {
         JsonObject payload = new JsonObject();
         payload.add("local", GSON.toJsonTree(local));
@@ -56,11 +44,7 @@ public record NodeStatus(LocalState local, JsonObject stats, List<Block> blocks,
         return payload;
     }
 
-    /**
-     * Relit une charge utile reçue du réseau.
-     *
-     * @throws IllegalArgumentException si elle est mal formée (champ absent ou illisible)
-     */
+    // Relit une charge utile reçue du réseau
     public static NodeStatus fromPayload(JsonObject p) {
         try {
             if (p == null || !p.has("local") || !p.get("local").isJsonObject()) {
@@ -97,7 +81,7 @@ public record NodeStatus(LocalState local, JsonObject stats, List<Block> blocks,
         }
     }
 
-    // ---- lecture pratique des compteurs
+    // lecture pratique des compteurs
 
     public long stat(String key, long fallback) {
         try {
@@ -107,7 +91,7 @@ public record NodeStatus(LocalState local, JsonObject stats, List<Block> blocks,
         }
     }
 
-    /** Nœuds dont ce nœud attend encore un REPLY. */
+    // Nœuds dont ce nœud attend encore un REPLY
     public List<String> awaiting() {
         List<String> out = new ArrayList<>();
         if (stats.has("awaiting") && stats.get("awaiting").isJsonArray()) {

@@ -24,27 +24,13 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-/**
- * Tout ce que Binôme 1 fournit à un nœud, assemblé et branché :
- * horloge, client MQTT, MessageHandler, registre (clés de {@code keys/}), réplicateur, Chandy-Lamport.
- *
- * <pre>
- * // dans FarmerNode (Binôme 2)
- * NodeRuntime rt = new NodeRuntime("A", this);                 // this = LocalStateProvider
- * RicartAgrawala ra = new RicartAgrawala("A", rt.clock(), rt.sender());
- * rt.handler().register(ra, MessageType.REQUEST, MessageType.REPLY);
- * rt.start();                                                   // connexion + rattrapage du registre
- * IrrigationSequence seq = rt.irrigationSequence(ra);
- * seq.irrigate((quota, reservoir) -> Math.min(besoin, Math.min(quota, reservoir)), listener);
- * rt.snapshot().startSnapshot();                                // déclencher un snapshot depuis ce nœud
- * </pre>
- */
+// Tout ce que Binôme 1 fournit à un nœud, assemblé et branché
 public class NodeRuntime {
 
-    /** Nombre de blocs refusés récents joints à chaque balise. */
+    // Nombre de blocs refusés récents joints à chaque balise
     public static final int MAX_REJECTED_IN_BEACON = 20;
 
-    /** Attente maximale d'un rattrapage du registre avant de créer un bloc. */
+    // Attente maximale d'un rattrapage du registre avant de créer un bloc
     public static final long SYNC_TIMEOUT_MS = 3000;
 
     private final String nodeId;
@@ -59,12 +45,12 @@ public class NodeRuntime {
     private ScheduledExecutorService beacons;
     private boolean beaconErrorLogged;
 
-    /** Nœud standard : broker et mot de passe de {@link Config}, clés dans {@code keys/}. */
+    // Nœud standard : broker et mot de passe de Config, clés dans keys/
     public NodeRuntime(String nodeId, LocalStateProvider stateProvider) {
         this(nodeId, stateProvider, Path.of(Config.KEYS_DIR));
     }
 
-    /** Variante avec un dossier de clés (tests). */
+    // Variante avec un dossier de clés (tests)
     public NodeRuntime(String nodeId, LocalStateProvider stateProvider, Path keysDir) {
         this.nodeId = nodeId;
         this.stateProvider = stateProvider;
@@ -80,19 +66,19 @@ public class NodeRuntime {
         mqtt.setIncomingHandler(handler);
     }
 
-    /** Connexion au broker, puis demande de rattrapage du registre (un nœud qui démarre peut être en retard). */
+    // Connexion au broker
     public void start() throws MqttException, InterruptedException {
         mqtt.connectWithRetry(5, 1000);
         replicator.requestSync();
         startBeacons(Config.STATUS_PERIOD_MS);
     }
 
-    /** Compteurs propres au nœud, joints à chaque balise d'état (demandes, accès…). Facultatif. */
+    // Compteurs propres au nœud, joints à chaque balise d'état (demandes, accès…)
     public void setStatsSupplier(Supplier<JsonObject> supplier) {
         this.statsSupplier = supplier == null ? JsonObject::new : supplier;
     }
 
-    /** Démarre les balises d'état {@code NODE_STATUS} ({@code periodMs <= 0} : aucune balise). */
+    // Démarre les balises d'état NODE_STATUS (periodMs <= 0 : aucune balise)
     public synchronized void startBeacons(long periodMs) {
         if (periodMs <= 0 || beacons != null) {
             return;
@@ -114,11 +100,7 @@ public class NodeRuntime {
         }, periodMs, periodMs, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * Diffuse maintenant l'état du nœud : état local, compteurs, chaîne complète (sans genesis).
-     * Lu sous le verrou du client MQTT, comme le snapshot et la séquence d'irrigation : l'état publié est
-     * toujours cohérent (jamais un bloc ajouté mais des compteurs pas encore mis à jour).
-     */
+    // Diffuse maintenant l'état du nœud : état local, compteurs, chaîne complète (sans genesis)
     public void publishStatus() {
         if (!mqtt.isConnected()) {
             return;
@@ -148,7 +130,7 @@ public class NodeRuntime {
         handler.shutdown();
     }
 
-    /** La séquence d'irrigation du contrat (section 8), avec la pompe fournie par Binôme 2. */
+    // La séquence d'irrigation du contrat (section 8), avec la pompe fournie par Binôme 2
     public IrrigationSequence irrigationSequence(PumpAccess pump) {
         return new IrrigationSequence(nodeId, pump, ledger, replicator, mqtt, SYNC_TIMEOUT_MS);
     }

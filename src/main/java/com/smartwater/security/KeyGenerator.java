@@ -21,26 +21,16 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Clés de signature des nœuds (contrat, section 1.1).
- *
- * <pre>
- * keys/A.pub  clé publique  (X.509, Base64)   lue par tous
- * keys/A.key  clé privée    (PKCS#8, Base64)  lue uniquement par le nœud A (jamais commitée)
- * </pre>
- *
- * À lancer une seule fois avant le premier démarrage : {@code KeyGenerator}.
- * Les clés existantes ne sont jamais écrasées, sauf avec {@code --force}.
- */
+// Clés de signature des nœuds
 public final class KeyGenerator {
 
     private static final String CURVE = "secp256r1";
 
     private KeyGenerator() { }
 
-    // ---------------------------------------------------------------- génération
+    // génération
 
-    /** Génère keys/{A,B,C}.pub et keys/{A,B,C}.key. {@code --force} régénère les clés existantes. */
+    // Génère keys/{A,B,C}.pub et keys/{A,B,C}.key. --force régénère les clés existantes
     public static void main(String[] args) {
         boolean force = Arrays.asList(args).contains("--force");
         Path dir = Path.of(Config.KEYS_DIR);
@@ -53,12 +43,7 @@ public final class KeyGenerator {
         }
     }
 
-    /**
-     * Génère les clés de tous les nœuds dans {@code dir}.
-     *
-     * @return le nombre de paires générées (les paires déjà présentes sont conservées sauf si {@code force})
-     * @throws IllegalStateException si un nœud n'a que la moitié de sa paire (état incohérent) sans {@code force}
-     */
+    // Génère les clés de tous les nœuds dans dir
     public static int generateAll(Path dir, boolean force) throws IOException {
         Files.createDirectories(dir);
         int generated = 0;
@@ -84,7 +69,7 @@ public final class KeyGenerator {
         return generated;
     }
 
-    /** Nouvelle paire ECDSA secp256r1 (utilisée aussi par les tests). */
+    // Nouvelle paire ECDSA secp256r1 (utilisée aussi par les tests)
     public static KeyPair generateKeyPair() {
         try {
             KeyPairGenerator gen = KeyPairGenerator.getInstance("EC");
@@ -95,7 +80,7 @@ public final class KeyGenerator {
         }
     }
 
-    // ---------------------------------------------------------------- chargement
+    // chargement
 
     public static PublicKey loadPublicKey(String nodeId) {
         return loadPublicKey(Path.of(Config.KEYS_DIR), nodeId);
@@ -123,7 +108,7 @@ public final class KeyGenerator {
         }
     }
 
-    /** Les clés publiques de tous les nœuds (A, B, C) : ce dont un nœud ou le dashboard a besoin. */
+    // Les clés publiques de tous les nœuds (A, B, C) : ce dont un nœud ou le dashboard a besoin
     public static Map<String, PublicKey> loadAllPublicKeys(Path dir) {
         Map<String, PublicKey> keys = new LinkedHashMap<>();
         for (String id : Config.NODE_IDS) {
@@ -132,7 +117,7 @@ public final class KeyGenerator {
         return keys;
     }
 
-    // ---------------------------------------------------------------- fichiers
+    // fichiers
 
     private static Path publicKeyFile(Path dir, String nodeId) {
         return dir.resolve(checkNodeId(nodeId) + ".pub");
@@ -142,7 +127,7 @@ public final class KeyGenerator {
         return dir.resolve(checkNodeId(nodeId) + ".key");
     }
 
-    /** Refuse tout identifiant hors A/B/C (empêche aussi un chemin du type « ../x »). */
+    // Refuse tout identifiant hors A/B/C (empêche aussi un chemin du type « ../x »)
     private static String checkNodeId(String nodeId) {
         if (!Config.NODE_IDS.contains(nodeId)) {
             throw new IllegalArgumentException("Nœud inconnu : " + nodeId);

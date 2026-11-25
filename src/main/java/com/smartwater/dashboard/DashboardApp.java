@@ -51,19 +51,7 @@ import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Tableau de bord JavaFX (Partie 7, Binôme 2) : observe tout le système en <b>lecture seule</b>.
- *
- * <p>Panneaux : agriculteurs (état de la pompe, humidité, quota, demandes), réservoir, pompe (qui la tient,
- * file d'attente dans l'ordre de Ricart-Agrawala), registre (blocs, signatures, validité, réplication, blocs
- * refusés avec la règle violée), snapshot Chandy-Lamport, journal des messages.</p>
- *
- * <p>Options : {@code --keys=<dossier>} (clés publiques, par défaut {@code keys}),
- * {@code --broker=<url>}, {@code --tab=<0|1|2>} (onglet affiché au départ), {@code --capture=<fichier.png>} et
- * {@code --capture-after=<ms>} : enregistre une
- * image de la fenêtre puis se ferme (captures pour le rapport).</p>
- *
- * <pre>mvn javafx:run                       (ou : DashboardLauncher depuis l'IDE)</pre>
- *
+ * Tableau de bord JavaFX (Partie 7, Binôme 2) : observe tout le système en lecture seule
  * @author Houssine Ferjani (Binôme 2)
  */
 public class DashboardApp extends Application {
@@ -76,7 +64,7 @@ public class DashboardApp extends Application {
     private DashboardMqttClient mqtt;
     private Timeline refresh;
 
-    // ---- widgets mis à jour
+    // widgets mis à jour
     private final Label status = new Label("connexion…");
     private final Map<String, FarmerCard> cards = new HashMap<>();
     private final ProgressBar reservoirBar = new ProgressBar(1);
@@ -156,7 +144,7 @@ public class DashboardApp extends Application {
         }
     }
 
-    /** Thread « dashboard-connect » : connexion (bloquante) au broker, hors du thread de l'interface. */
+    // Thread « dashboard-connect » : connexion (bloquante) au broker, hors du thread de l'interface
     private class Connector extends Thread {
         Connector() {
             setName("dashboard-connect");
@@ -187,7 +175,7 @@ public class DashboardApp extends Application {
         }
     }
 
-    // ------------------------------------------------------------------ construction
+    // construction
 
     private Node header() {
         Label title = new Label("Smart Water Sharing");
@@ -221,7 +209,7 @@ public class DashboardApp extends Application {
     }
 
     private final TabPane tabs = new TabPane();
-    /** Écran de faible hauteur (portable) : polices, marges et listes réduites. */
+    // Écran de faible hauteur (portable) : polices, marges et listes réduites
     private boolean compact;
     private TableView<DashboardModel.BlockView> ledgerTable;
 
@@ -305,7 +293,7 @@ public class DashboardApp extends Application {
         return box;
     }
 
-    // ------------------------------------------------------------------ mise à jour
+    // mise à jour
 
     private void update() {
         DashboardModel.View v = model.view();
@@ -388,9 +376,9 @@ public class DashboardApp extends Application {
         inTransit.setAll(transit);
     }
 
-    // ------------------------------------------------------------------ composants
+    // composants
 
-    /** Carte d'un agriculteur. */
+    // Carte d'un agriculteur
     private static final class FarmerCard {
         final VBox root;
         final Label state = new Label();
@@ -495,7 +483,7 @@ public class DashboardApp extends Application {
         return c;
     }
 
-    // ------------------------------------------------------------------ utilitaires
+    // utilitaires
 
     private static String shortHash(String h) {
         return h == null ? "—" : h.length() > 10 ? h.substring(0, 10) + "…" : h;
@@ -511,7 +499,7 @@ public class DashboardApp extends Application {
         return opts;
     }
 
-    /** Image PNG de la fenêtre (captures pour le rapport). */
+    // Image PNG de la fenêtre (captures pour le rapport)
     private static void capture(Scene scene, File file) {
         WritableImage img = scene.snapshot(null);
         int w = (int) img.getWidth(), h = (int) img.getHeight();

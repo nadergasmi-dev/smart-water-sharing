@@ -12,43 +12,18 @@ import com.smartwater.irrigation.PumpAccess;
 
 import java.util.Objects;
 
-/**
- * Séquence imposée lors d'une irrigation (contrat, section 8), dans la section critique :
- *
- * <ol>
- *   <li>{@code requestPump()} : entrée en section critique ;</li>
- *   <li>vérifier que la copie du registre est à jour ;</li>
- *   <li>allocation (Binôme 2) avec le quota et le réservoir recalculés à partir de la chaîne ;</li>
- *   <li>si attribué &gt; 0 : {@code addBlock} — refusé ({@link InvalidBlockException}) → aucun compteur modifié,
- *       aucun événement ;</li>
- *   <li>mise à jour des compteurs (Binôme 2), seulement après le succès de {@code addBlock} ;</li>
- *   <li>diffusion de IRRIGATION_EVENT, puis de LEDGER_UPDATE ;</li>
- *   <li>{@code releasePump()} : <b>toujours</b>, même en cas de refus ou d'erreur.</li>
- * </ol>
- *
- * Le bloc est diffusé AVANT les REPLY différés : le nœud suivant reçoit donc le bloc avant l'autorisation
- * d'entrer (même topic d'expéditeur, ordre FIFO), et crée son propre bloc sur une chaîne à jour.
- *
- * <p>Juste avant {@code releasePump()}, la séquence diffuse {@code PUMP_RELEASED} : un message de
- * <b>supervision</b> pour le dashboard, qui ne fait pas partie de Ricart-Agrawala (2(N − 1) messages, sans
- * RELEASE). Les deux se font sous le verrou du client MQTT : l'annonce part avant les REPLY différés, donc le
- * dashboard ne voit jamais deux nœuds tenir la pompe en même temps.</p>
- */
+// Séquence imposée lors d'une irrigation, dans la section critique
 public final class IrrigationSequence {
 
-    /** Calcul de l'eau attribuée (Binôme 2) : {@code min(besoin, quotaRestant, réservoirDisponible)}. */
+    // Calcul de l'eau attribuée (Binôme 2) : min(besoin, quotaRestant, réservoirDisponible)
     @FunctionalInterface
     public interface Allocation {
         int liters(int quotaRemaining, int reservoirRemaining);
     }
 
-    /**
-     * Réactions de Binôme 2 (compteurs, affichage). Toutes facultatives sauf {@link #onIrrigated}.
-     * {@code onIrrigated} est appelé SOUS le verrou du client MQTT : il doit être court, et si Binôme 2 protège
-     * son état par son propre verrou, l'ordre doit toujours être « client MQTT puis son verrou » (jamais l'inverse).
-     */
+    // Réactions de Binôme 2 (compteurs, affichage)
     public interface Listener {
-        /** Étape 5 : mettre à jour les compteurs (quota, réservoir) — appelé seulement si le bloc est accepté. */
+        // Étape 5 : mettre à jour les compteurs (quota, réservoir) — appelé seulement si le bloc est accepté
         void onIrrigated(Block block);
 
         default void onNothingAllocated() { }
@@ -58,7 +33,7 @@ public final class IrrigationSequence {
 
     public enum Outcome { IRRIGATED, NOTHING_ALLOCATED, REFUSED, LEDGER_NOT_UP_TO_DATE }
 
-    /** Résultat d'une tentative d'irrigation. {@code block} n'est renseigné que si IRRIGATED. */
+    // Résultat d'une tentative d'irrigation. block n'est renseigné que si IRRIGATED
     public record Result(Outcome outcome, int liters, Block block, String reason) { }
 
     private final String nodeId;
@@ -78,7 +53,7 @@ public final class IrrigationSequence {
         this.syncTimeoutMs = syncTimeoutMs;
     }
 
-    /** Exécute la séquence complète ; la pompe est toujours libérée, même si une exception est levée. */
+    // Exécute la séquence complète ; la pompe est toujours libérée, même si une exception est levée
     public Result irrigate(Allocation allocation, Listener listener) {
         pump.requestPump();
         try {
@@ -127,11 +102,7 @@ public final class IrrigationSequence {
         }
     }
 
-    /**
-     * Annonce la sortie au dashboard ({@code PUMP_RELEASED}, supervision) puis libère la pompe (REPLY différés),
-     * d'un seul bloc sous le verrou du client MQTT. Ordre des verrous respecté : {@code sender} puis Ricart-Agrawala.
-     * Si l'annonce échoue, la pompe est quand même libérée : personne ne doit rester bloqué.
-     */
+    // Annonce la sortie au dashboard (PUMP_RELEASED
     private void releaseAndAnnounce() {
         synchronized (sender) {
             try {
@@ -143,10 +114,7 @@ public final class IrrigationSequence {
         }
     }
 
-    /**
-     * Vérifie que la copie locale est au moins aussi longue que la dernière copie connue des autres nœuds ;
-     * sinon demande un rattrapage et attend jusqu'à {@code syncTimeoutMs}.
-     */
+    // Vérifie que la copie locale est au moins aussi longue que la dernière copie connue des autres nœuds
     private boolean ensureLedgerUpToDate() {
         int known = replicator.getPeerHeads().values().stream()
                 .mapToInt(LedgerReplicator.PeerHead::length).max().orElse(0);

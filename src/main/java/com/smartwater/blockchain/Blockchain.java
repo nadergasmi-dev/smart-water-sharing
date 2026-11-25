@@ -13,29 +13,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Registre privé avec validation AVANT ajout : un bloc invalide n'entre jamais dans la chaîne
- * (contrat, section 6.3).
- *
- * <ul>
- *   <li>V1 hash recalculé = hash du bloc</li>
- *   <li>V2 index = dernier + 1 et previousHash = hash du dernier</li>
- *   <li>V3 nœud connu (A, B ou C)</li>
- *   <li>V4 signature valide avec la clé publique du nœud</li>
- *   <li>V5 liters &gt; 0</li>
- *   <li>V6 quotaRemaining = quota actuel du nœud − liters, et ≥ 0</li>
- *   <li>V7 liters ≤ réservoir restant</li>
- * </ul>
- *
- * Le quota de chaque nœud et le réservoir restant sont <b>recalculés à partir de la chaîne</b>
- * (valeurs initiales de {@link Config} moins les blocs déjà acceptés) : chaque nœud vérifie ainsi
- * les blocs des autres sans dépendre de leur état local.
- *
- * Les méthodes publiques sont {@code synchronized} : le thread MQTT et le thread du nœud y accèdent.
- */
+// Registre privé avec validation AVANT ajout : un bloc invalide n'entre jamais dans la chaîne
 public class Blockchain implements Ledger {
 
-    /** Au-delà, les refus les plus anciens sont oubliés (évite qu'un flot de faux blocs sature la mémoire). */
+    // Au-delà, les refus les plus anciens sont oubliés (évite qu'un flot de faux blocs sature la mémoire)
     private static final int MAX_REJECTED = 1000;
 
     private final PrivateKey privateKey;                 // null pour l'observateur
@@ -46,11 +27,7 @@ public class Blockchain implements Ledger {
     private final List<Block> chain = new ArrayList<>();
     private final List<RejectedBlock> rejected = new ArrayList<>();
 
-    /**
-     * Constructeur général (tests, démos). En production, utiliser {@link #forNode} ou {@link #observer}.
-     *
-     * @param privateKey clé du nœud local qui signe ses blocs ; {@code null} = registre en lecture seule
-     */
+    // Constructeur général (tests, démos)
     public Blockchain(PrivateKey privateKey, Map<String, PublicKey> publicKeys,
                       Map<String, Integer> initialQuotas, int reservoirInitial) {
         this.privateKey = privateKey;
@@ -60,9 +37,9 @@ public class Blockchain implements Ledger {
         this.chain.add(Block.genesis());
     }
 
-    // ---------------------------------------------------------------- obtention (contrat, section 7)
+    // obtention (contrat, section 7)
 
-    /** Registre d'un nœud : charge sa clé privée et les 3 clés publiques ({@code keys/}), valeurs de {@link Config}. */
+    // Registre d'un nœud : charge sa clé privée et les 3 clés publiques (keys/), valeurs de Config
     public static Blockchain forNode(String nodeId) {
         return forNode(nodeId, Path.of(Config.KEYS_DIR));
     }
@@ -73,10 +50,7 @@ public class Blockchain implements Ledger {
                 Config.initialQuotas(), Config.RESERVOIR_INITIAL);
     }
 
-    /**
-     * Registre du dashboard : clés publiques seulement, ne crée jamais de bloc.
-     * Il reçoit les blocs répliqués ({@link #acceptBlock}), les valide et enregistre les refus.
-     */
+    // Registre du dashboard : clés publiques seulement, ne crée jamais de bloc
     public static Blockchain observer() {
         return observer(Path.of(Config.KEYS_DIR));
     }
@@ -86,16 +60,9 @@ public class Blockchain implements Ledger {
                 Config.initialQuotas(), Config.RESERVOIR_INITIAL);
     }
 
-    // ---------------------------------------------------------------- ajout
+    // ajout
 
-    /**
-     * Crée le bloc, le signe avec la clé du nœud local, le valide (V1-V7) puis l'ajoute.
-     * Le bloc est toujours signé avec la clé du nœud local : demander un bloc au nom d'un autre
-     * nœud est donc refusé par V4.
-     *
-     * @throws InvalidBlockException si une règle échoue ; la chaîne n'est alors pas modifiée
-     * @throws IllegalStateException si ce registre est un observateur (aucune clé privée)
-     */
+    // Crée le bloc, le signe avec la clé du nœud local, le valide (V1-V7) puis l'ajoute
     @Override
     public synchronized Block addBlock(String nodeId, int liters, int quotaRemaining) throws InvalidBlockException {
         if (privateKey == null) {
@@ -108,12 +75,7 @@ public class Blockchain implements Ledger {
         return block;
     }
 
-    /**
-     * Ajoute un bloc reçu d'un autre nœud (LEDGER_UPDATE) s'il passe les 7 règles.
-     * Usage interne (réplication).
-     *
-     * @throws InvalidBlockException si une règle échoue ; la chaîne n'est alors pas modifiée
-     */
+    // Ajoute un bloc reçu d'un autre nœud (LEDGER_UPDATE) s'il passe les 7 règles
     public synchronized void acceptBlock(Block b) throws InvalidBlockException {
         accept(b);
     }
@@ -138,7 +100,7 @@ public class Blockchain implements Ledger {
         }
     }
 
-    /** Applique V1 à V7 dans l'ordre du contrat ; ne modifie rien. */
+    // Applique V1 à V7 dans l'ordre du contrat ; ne modifie rien
     private void check(Block b) throws InvalidBlockException {
         if (b == null) {
             throw new InvalidBlockException("V1", "bloc absent");
@@ -194,18 +156,15 @@ public class Blockchain implements Ledger {
         }
     }
 
-    // ---------------------------------------------------------------- validation de la chaîne
+    // validation de la chaîne
 
-    /** Vérification complète V1 à V4 (au démarrage ou après une synchronisation). */
+    // Vérification complète V1 à V4 (au démarrage ou après une synchronisation)
     @Override
     public synchronized boolean validate() {
         return firstInvalidIndex(chain, publicKeys) == -1;
     }
 
-    /**
-     * Index du premier bloc invalide d'une chaîne (V1 à V4), ou -1 si elle est valide.
-     * Le genesis doit être le genesis fixe du contrat. Visible du package pour les tests de falsification.
-     */
+    // Index du premier bloc invalide d'une chaîne (V1 à V4), ou -1 si elle est valide
     static int firstInvalidIndex(List<Block> blocks, Map<String, PublicKey> keys) {
         Block genesis = Block.genesis();
         if (blocks.isEmpty() || blocks.get(0) == null
@@ -227,7 +186,7 @@ public class Blockchain implements Ledger {
         return -1;
     }
 
-    // ---------------------------------------------------------------- lecture
+    // lecture
 
     @Override
     public synchronized List<Block> getChain() {
@@ -243,17 +202,17 @@ public class Blockchain implements Ledger {
         return lastBlock();
     }
 
-    /** Quota restant d'un nœud, recalculé à partir de la chaîne. */
+    // Quota restant d'un nœud, recalculé à partir de la chaîne
     public synchronized int getQuota(String nodeId) {
         return quotaOf(nodeId);
     }
 
-    /** Litres restant dans le réservoir, recalculés à partir de la chaîne. */
+    // Litres restant dans le réservoir, recalculés à partir de la chaîne
     public synchronized int getReservoirRemaining() {
         return reservoirOf();
     }
 
-    // ---------------------------------------------------------------- calculs internes (verrou déjà pris)
+    // calculs internes (verrou déjà pris)
 
     private Block lastBlock() {
         return chain.get(chain.size() - 1);

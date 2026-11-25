@@ -22,57 +22,25 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
- * Un agriculteur (A, B ou C) : un nœud indépendant du système réparti.
- *
- * <p>Il assemble :</p>
- * <ul>
- *   <li>sa parcelle simulée ({@link SoilSimulator}) et son état métier ({@link FarmerState}) ;</li>
- *   <li>tout ce que fournit Binôme 1, déjà branché ({@link NodeRuntime} : horloge de Lamport, MQTT,
- *       registre, réplication, Chandy-Lamport) ;</li>
- *   <li>la pompe distribuée ({@link RicartAgrawala}) et la vue locale du réservoir ({@link PumpResource}).</li>
- * </ul>
- *
- * <p><b>Cycle</b> ({@link #step()}) : le sol s'assèche ; si l'humidité passe sous le seuil <b>et</b> qu'il
- * reste du quota, l'agriculteur demande la pompe pour remonter jusqu'à l'humidité visée. Sinon, il ne
- * diffuse <b>aucun</b> {@code REQUEST} (contrat, section 9). L'irrigation suit la séquence imposée
- * ({@link IrrigationSequence}, contrat section 8) : l'allocation {@code min(besoin, quota, réservoir)} est
- * calculée dans la section critique, et les compteurs ne bougent qu'après le succès de {@code addBlock}.</p>
- *
- * <p><b>État local pour Chandy-Lamport</b> ({@link #getLocalState()}) : humidité, quota, état de la pompe
- * et REPLY différés, lus de façon cohérente. Chandy-Lamport l'appelle en tenant le verrou du client MQTT ;
- * la mise à jour des compteurs après une irrigation prend le même verrou, donc un snapshot ne voit jamais
- * une irrigation à moitié comptée.</p>
- *
- * <pre>
- * FarmerNode a = new FarmerNode("A");
- * a.start();              // connexion au broker + rattrapage du registre
- * a.startLoop(1000);      // un cycle par seconde
- * a.triggerSnapshot();    // état global (Chandy-Lamport) depuis ce nœud
- * </pre>
- *
+ * Un agriculteur (A, B ou C) : un nœud indépendant du système réparti
  * @author Houssine Ferjani (Binôme 2)
  */
 public class FarmerNode implements LocalStateProvider, MessageListener {
 
-    /** Résultat d'un cycle. */
+    // Résultat d'un cycle
     public enum Outcome {
-        /** Humidité suffisante : pas de demande. */
+        // Humidité suffisante : pas de demande
         NO_NEED,
-        /** Sol sec mais quota épuisé : pas de demande. */
+        // Sol sec mais quota épuisé : pas de demande
         NO_QUOTA,
         IRRIGATED,
-        /** Entré dans la section critique, mais réservoir vide : pas de bloc. */
+        // Entré dans la section critique, mais réservoir vide : pas de bloc
         NOTHING_ALLOCATED,
-        /** Bloc refusé par le registre : compteurs inchangés. */
+        // Bloc refusé par le registre : compteurs inchangés
         REFUSED,
         LEDGER_NOT_UP_TO_DATE
     }
 
-    /**
-     * @param humidity humidité au moment de la décision (après assèchement)
-     * @param need     litres demandés (0 si pas de demande)
-     * @param liters   litres effectivement reçus
-     */
     public record StepResult(Outcome outcome, double humidity, int need, int liters) { }
 
     private final String nodeId;
@@ -83,12 +51,12 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
     private final RicartAgrawala ra;
     private final IrrigationSequence sequence;
 
-    /** Un seul cycle à la fois : Ricart-Agrawala n'est pas réentrant. */
+    // Un seul cycle à la fois : Ricart-Agrawala n'est pas réentrant
     private final Object stepLock = new Object();
     private volatile Thread loop;
     private boolean quotaExhaustedLogged;            // protégé par stepLock
 
-    /** Nœud standard : clés dans {@code keys/}, sol et seuils par défaut. */
+    // Nœud standard : clés dans keys/, sol et seuils par défaut
     public FarmerNode(String nodeId) {
         this(nodeId, Path.of(Config.KEYS_DIR), new SoilSimulator(nodeId.hashCode()), new FarmerState(nodeId));
     }
@@ -111,10 +79,7 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         rt.setStatsSupplier(this::statsJson);          // compteurs joints à chaque balise d'état (supervision)
     }
 
-    /**
-     * Compteurs propres au nœud, joints aux balises d'état {@code NODE_STATUS} : le dashboard les affiche tels quels
-     * (il ne peut pas les déduire s'il démarre après le nœud). Appelée sous le verrou du client MQTT.
-     */
+    // Compteurs propres au nœud, joints aux balises d'état NODE_STATUS
     private JsonObject statsJson() {
         RicartAgrawala.View v = ra.view();
         JsonObject o = new JsonObject();
@@ -128,25 +93,22 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         return o;
     }
 
-    // ------------------------------------------------------------------ cycle de vie
+    // cycle de vie
 
-    /** Connexion au broker, puis rattrapage du registre. */
+    // Connexion au broker, puis rattrapage du registre
     public void start() throws MqttException, InterruptedException {
         rt.start();
         log("démarré : humidité " + fmt(soil.getHumidity()) + " %, seuil " + fmt(state.getThreshold())
                 + " %, quota " + state.getQuotaRemaining() + " L");
     }
 
-    /** Arrête la boucle automatique puis se déconnecte. */
+    // Arrête la boucle automatique puis se déconnecte
     public void stop() {
         stopLoop();
         rt.stop();
     }
 
-    /**
-     * Thread de l'agriculteur (cours, ch. 4 : une classe qui hérite de {@link Thread} et redéfinit
-     * {@code run()}) : un cycle toutes les {@code periodMs} ms.
-     */
+    // Thread de l'agriculteur (cours, ch. 4
     private class FarmerLoop extends Thread {
 
         private final long periodMs;
@@ -175,7 +137,7 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         }
     }
 
-    /** Lance un cycle toutes les {@code periodMs} ms sur un thread dédié. */
+    // Lance un cycle toutes les periodMs ms sur un thread dédié
     public synchronized void startLoop(long periodMs) {
         if (loop != null) {
             throw new IllegalStateException("boucle déjà lancée");
@@ -185,10 +147,7 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         t.start();                       // start() crée le thread puis appelle run() (jamais run() directement)
     }
 
-    /**
-     * Arrête la boucle : le cycle en cours se termine, puis le thread s'arrête. S'il est encore bloqué
-     * après 10 s (pompe jamais accordée), il est interrompu : Ricart-Agrawala abandonne alors la demande.
-     */
+    // Arrête la boucle : le cycle en cours se termine, puis le thread s'arrête
     public void stopLoop() {
         Thread t;
         synchronized (this) {
@@ -209,18 +168,14 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         }
     }
 
-    /** @return vrai si la boucle automatique tourne */
     public boolean isLooping() {
         Thread t = loop;
         return t != null && t.isAlive();
     }
 
-    // ------------------------------------------------------------------ comportement de l'agriculteur
+    // comportement de l'agriculteur
 
-    /**
-     * Un pas de temps : le sol s'assèche, puis demande de la pompe si l'humidité est sous le seuil et
-     * qu'il reste du quota. Bloquant pendant l'attente de la pompe.
-     */
+    // Un pas de temps
     public StepResult step() {
         synchronized (stepLock) {
             double humidity = soil.dry();
@@ -238,7 +193,7 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         }
     }
 
-    /** Demande la pompe et irrigue (séquence du contrat, section 8). Appelé avec {@code stepLock}. */
+    // Demande la pompe et irrigue (séquence du contrat, section 8)
     private StepResult irrigate(double humidity, int need) {
         state.recordRequest();
         log("humidité " + fmt(humidity) + " % < " + fmt(state.getThreshold()) + " % : demande de "
@@ -282,7 +237,7 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         return new StepResult(o, humidity, need, liters);
     }
 
-    /** Irrigation d'un autre nœud : met à jour la vue locale du réservoir. */
+    // Irrigation d'un autre nœud : met à jour la vue locale du réservoir
     @Override
     public void onMessage(Message m) {
         if (m == null || m.getType() != MessageType.IRRIGATION_EVENT || m.getPayload() == null) {
@@ -294,12 +249,9 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         }
     }
 
-    // ------------------------------------------------------------------ Chandy-Lamport
+    // Chandy-Lamport
 
-    /**
-     * Copie cohérente de l'état local (contrat, section 7). Appelée par Chandy-Lamport en tenant le
-     * verrou du client MQTT ; l'état de la pompe est lu d'un seul coup ({@link RicartAgrawala#view()}).
-     */
+    // Copie cohérente de l'état local
     @Override
     public LocalState getLocalState() {
         RicartAgrawala.View v = ra.view();
@@ -307,17 +259,17 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
                 v.deferredReplies());
     }
 
-    /** Déclenche un snapshot Chandy-Lamport depuis ce nœud (ignoré si un snapshot est déjà en cours). */
+    // Déclenche un snapshot Chandy-Lamport depuis ce nœud (ignoré si un snapshot est déjà en cours)
     public void triggerSnapshot() {
         rt.snapshot().startSnapshot();
     }
 
-    /** Dernier état global connu (peut être incomplet si le snapshot est en cours), ou {@code null}. */
+    // Dernier état global connu (peut être incomplet si le snapshot est en cours), ou null
     public GlobalSnapshot lastSnapshot() {
         return rt.snapshot().getResult();
     }
 
-    // ------------------------------------------------------------------ accès
+    // accès
 
     public String getNodeId()       { return nodeId; }
     public SoilSimulator soil()     { return soil; }
@@ -340,13 +292,9 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         return String.format(java.util.Locale.ROOT, "%.1f", d);
     }
 
-    // ------------------------------------------------------------------ lancement en console
+    // lancement en console
 
-    /**
-     * Lance un agriculteur en console : {@code FarmerNode <A|B|C> [périodeMs]}.
-     * Commandes : {@code s} snapshot, {@code e} état, {@code q} quitter.
-     * Nécessite le broker et les clés de {@code keys/} (clé privée du nœud).
-     */
+    // Lance un agriculteur en console : FarmerNode [périodeMs]
     public static void main(String[] args) throws Exception {
         if (args.length < 1 || !Config.NODE_IDS.contains(args[0])) {
             System.err.println("usage : FarmerNode <A|B|C> [périodeMs]");

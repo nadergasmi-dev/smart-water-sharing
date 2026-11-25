@@ -3,17 +3,7 @@ package com.smartwater.irrigation;
 import com.smartwater.Config;
 
 /**
- * Vue locale de la ressource partagée : le réservoir commun alimenté par la pompe.
- *
- * <p>Le registre (blockchain) fait foi : le niveau réel est {@code Blockchain.getReservoirRemaining()}.
- * Cette classe garde, pour l'affichage et le snapshot, le niveau connu du nœud et l'utilisation de la pompe
- * par ce nœud. Elle n'est modifiée qu'<b>après</b> le succès de {@code Ledger.addBlock} (irrigation de ce
- * nœud) ou à la réception d'un {@code IRRIGATION_EVENT} (irrigation d'un autre nœud).</p>
- *
- * <p>Le réservoir ne fait que baisser : le niveau retenu est le plus bas annoncé. Les événements de deux
- * expéditeurs différents peuvent arriver dans le désordre (FIFO seulement par expéditeur), mais le minimum
- * donne toujours le bon résultat.</p>
- *
+ * Vue locale de la ressource partagée : le réservoir commun alimenté par la pompe
  * @author Houssine Ferjani (Binôme 2)
  */
 public class PumpResource {
@@ -24,7 +14,7 @@ public class PumpResource {
     private int ownLiters;
     private String lastUser;
 
-    /** Réservoir du contrat : 1000 L. */
+    // Réservoir du contrat : 1000 L
     public PumpResource() {
         this(Config.RESERVOIR_INITIAL);
     }
@@ -37,13 +27,7 @@ public class PumpResource {
         this.level = capacity;
     }
 
-    /**
-     * Irrigation de ce nœud, acceptée dans le registre.
-     *
-     * @param nodeId        ce nœud
-     * @param liters        litres pompés
-     * @param levelAfter    niveau du réservoir recalculé depuis la chaîne après le bloc
-     */
+    // Irrigation de ce nœud, acceptée dans le registre
     public synchronized void recordOwnIrrigation(String nodeId, int liters, int levelAfter) {
         if (liters <= 0) {
             throw new IllegalArgumentException("liters <= 0 : " + liters);
@@ -54,13 +38,13 @@ public class PumpResource {
         observeLevel(levelAfter);
     }
 
-    /** Irrigation d'un autre nœud ({@code IRRIGATION_EVENT}). */
+    // Irrigation d'un autre nœud (IRRIGATION_EVENT)
     public synchronized void recordOtherIrrigation(String nodeId, int levelAfter) {
         lastUser = nodeId;
         observeLevel(levelAfter);
     }
 
-    /** Niveau annoncé (chaîne ou événement) : on garde le plus bas, le réservoir ne remonte jamais. */
+    // Niveau annoncé (chaîne ou événement) : on garde le plus bas, le réservoir ne remonte jamais
     public synchronized void observeLevel(int announced) {
         if (announced >= 0 && announced < level) {
             level = announced;

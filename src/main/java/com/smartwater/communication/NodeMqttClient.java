@@ -1,13 +1,5 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
- */
 package com.smartwater.communication;
 
-/**
- *
- * @author nader
- */
 import com.smartwater.Config;
 import com.smartwater.algorithms.LamportClock;
 import org.eclipse.paho.client.mqttv3.*;
@@ -21,16 +13,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class NodeMqttClient implements MessageSender {
 
-    /** Un topic par expéditeur : {@code water/from/{id}} (contrat, section 2). Seul le nœud {id} peut y écrire (ACL). */
+    // Un topic par expéditeur : water/from/{id}
     public static final String TOPIC_FROM_PREFIX = "water/from/";
-    /** Abonnement aux messages de tous les expéditeurs. */
+    // Abonnement aux messages de tous les expéditeurs
     public static final String TOPIC_FROM_ALL = TOPIC_FROM_PREFIX + "+";
     public static final int QOS = 2;
 
     private final String nodeId;
     private final LamportClock clock;
     private final String topicOut;
-    /** Messages jetés car leur champ {@code from} ne correspondait pas au topic (usurpation). */
+    // Messages jetés car leur champ from ne correspondait pas au topic (usurpation)
     private final AtomicInteger spoofedCount = new AtomicInteger();
     private MqttClient client;
         // Déduplication : on retient les 1000 derniers msgId vus
@@ -47,19 +39,15 @@ public class NodeMqttClient implements MessageSender {
     private volatile java.util.function.Consumer<Message> incomingHandler;
 
     private final String brokerUrl;
-    /** Mot de passe MQTT du nœud ; null = connexion anonyme (broker non sécurisé). */
+    // Mot de passe MQTT du nœud ; null = connexion anonyme (broker non sécurisé)
     private final String password;
 
-    /**
-     * Se connecte à {@link Config#BROKER_URL} avec {@code username = nodeId} et le mot de passe de
-     * {@link Config#mqttPassword(String)}. Si aucun mot de passe n'est configuré, la connexion est
-     * anonyme : elle ne fonctionne que sur un broker non sécurisé.
-     */
+    // Se connecte à BROKER_URL avec username = nodeId et le mot de passe de mqttPassword
     public NodeMqttClient(String nodeId, LamportClock clock) {
         this(nodeId, clock, Config.BROKER_URL, configuredPasswordOrNull(nodeId));
     }
 
-    /** Variante explicite (broker et mot de passe fournis) ; {@code password == null} = connexion anonyme. */
+    // Variante explicite (broker et mot de passe fournis) ; password == null = connexion anonyme
     public NodeMqttClient(String nodeId, LamportClock clock, String brokerUrl, String password) {
         this.nodeId = nodeId;
         this.clock = clock;
@@ -76,11 +64,11 @@ public class NodeMqttClient implements MessageSender {
         }
     }
 
-    /** Branche le récepteur des messages (MessageHandler, étape 6). */
+    // Branche le récepteur des messages (MessageHandler, étape 6)
     public void setIncomingHandler(java.util.function.Consumer<Message> handler) {
         this.incomingHandler = handler;
     }
-    /** Réessaie la connexion initiale (Paho ne réessaie pas tout seul le 1er connect). */
+    // Réessaie la connexion initiale (Paho ne réessaie pas tout seul le 1er connect)
     public void connectWithRetry(int maxAttempts, long delayMs) throws MqttException, InterruptedException {
         MqttException last = null;
         for (int i = 1; i <= maxAttempts; i++) {
@@ -103,7 +91,7 @@ public class NodeMqttClient implements MessageSender {
         return client != null && client.isConnected();
     }
 
-    /** Attend une éventuelle reconnexion automatique. */
+    // Attend une éventuelle reconnexion automatique
     private boolean waitConnected(long timeoutMs) {
         long end = System.currentTimeMillis() + timeoutMs;
         while (!isConnected()) {
@@ -176,11 +164,7 @@ public class NodeMqttClient implements MessageSender {
         client.subscribe(TOPIC_FROM_ALL, QOS);
     }
 
-    /**
-     * Réception brute : JSON -> Message, puis contrôles dans cet ordre :
-     * topic valide, message complet, expéditeur du topic = champ {@code from} (anti-usurpation),
-     * pas un message de soi-même, message destiné à ce nœud, pas un doublon.
-     */
+    // Réception brute
     private void onRawMessage(String topic, MqttMessage mqttMessage) {
         // L'expéditeur réel est celui du topic : l'ACL du broker interdit d'écrire sous le nom d'un autre.
         if (!topic.startsWith(TOPIC_FROM_PREFIX)) {
@@ -247,7 +231,7 @@ public class NodeMqttClient implements MessageSender {
 
     public String getNodeId() { return nodeId; }
 
-    /** Nombre de messages jetés car leur champ {@code from} ne correspondait pas à leur topic. */
+    // Nombre de messages jetés car leur champ from ne correspondait pas à leur topic
     public int getSpoofedMessageCount() { return spoofedCount.get(); }
 
     // publish() : étape 5

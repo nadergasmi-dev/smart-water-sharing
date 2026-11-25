@@ -31,40 +31,16 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Tout ce qu'affiche le dashboard, calculé à partir des seuls messages lus sur {@code water/from/+}.
- * Aucune dépendance à JavaFX : la fenêtre lit une copie immuable ({@link #view()}) à intervalle régulier,
- * et la logique se teste sans interface.
- *
- * <ul>
- *   <li><b>Pompe (Ricart-Agrawala)</b> : l'état de chaque nœud est <i>reconstitué</i> à partir des messages
- *       observés. Après sa k-ième demande, un nœud est {@code WANTED} ; il passe {@code HELD} quand il a reçu
- *       k × (N − 1) {@code REPLY} au total ; il revient à {@code RELEASED} avec son k-ième {@code PUMP_RELEASED}
- *       (annonce de supervision envoyée par la séquence d'irrigation : Ricart-Agrawala lui-même n'a pas de RELEASE).
- *       Compter les totaux (plutôt que suivre une suite d'événements) rend le calcul insensible à l'ordre
- *       d'arrivée entre topics différents : un {@code REPLY} de B à A peut arriver au dashboard avant le
- *       {@code REQUEST} de A, puisqu'ils passent par deux topics distincts.</li>
- *   <li><b>Registre</b> : copie observatrice ({@link Blockchain#observer()}) tenue à jour par un réplicateur
- *       passif ; elle revalide chaque bloc (V1 à V7) et garde les blocs refusés avec la raison.</li>
- *   <li><b>Quotas et réservoir</b> : recalculés depuis cette copie (la chaîne fait foi).</li>
- *   <li><b>Snapshot</b> : état global assemblé par {@link ChandyLamport#observer()} à partir des
- *       {@code SNAPSHOT_STATE}.</li>
- *   <li><b>Balises d'état</b> ({@code NODE_STATUS}, une par nœud et par seconde) : l'état <i>réel</i> de chaque
- *       nœud (pompe, humidité, quota, compteurs) et sa chaîne complète. Elles rendent le dashboard exact même
- *       lancé en retard (il n'a aucun historique, MQTT n'en garde pas) : le registre se complète, et la
- *       reconstitution de la pompe, qui compte des messages, est <b>recalée</b> sur l'état annoncé. Elles ne sont
- *       pas affichées dans le journal.</li>
- * </ul>
- *
+ * Tout ce qu'affiche le dashboard, calculé à partir des seuls messages lus sur water/from/+
  * @author Houssine Ferjani (Binôme 2)
  */
 public class DashboardModel implements Consumer<Message> {
 
-    /** Nombre d'événements gardés pour le journal. */
+    // Nombre d'événements gardés pour le journal
     public static final int MAX_EVENTS = 300;
-    /** Nombre maximal de blocs refusés affichés. */
+    // Nombre maximal de blocs refusés affichés
     public static final int MAX_REJECTED = 100;
 
-    /** @param liveness {@code UNKNOWN} (rien reçu), {@code ONLINE} (signal récent) ou {@code OFFLINE} (silence) */
     public record FarmerView(String nodeId, String pumpState, long requests, long entries, int lastRequestLamport,
                              int quota, int litersUsed, Double humidity, String snapshotPumpState,
                              long lastSeen, String liveness) { }
@@ -79,13 +55,13 @@ public class DashboardModel implements Consumer<Message> {
                        Map<String, LedgerReplicator.PeerHead> peerHeads, List<LedgerReplicator.Divergence> divergences,
                        GlobalSnapshot snapshot, List<EventView> events, long messages, long beacons) {
 
-        /** Plus d'un nœud tient la pompe d'après les messages : exclusion mutuelle violée. */
+        // Plus d'un nœud tient la pompe d'après les messages : exclusion mutuelle violée
         public boolean mutualExclusionViolated() {
             return holders.size() > 1;
         }
     }
 
-    /** Compteurs Ricart-Agrawala d'un nœud, tels qu'observés. */
+    // Compteurs Ricart-Agrawala d'un nœud, tels qu'observés
     private static final class PumpCounters {
         long requests;
         long releases;
@@ -98,7 +74,7 @@ public class DashboardModel implements Consumer<Message> {
         long releasesSinceBeacon;
     }
 
-    /** Au-delà de ce silence (ni message ni balise), un nœud est considéré hors ligne. */
+    // Au-delà de ce silence (ni message ni balise), un nœud est considéré hors ligne
     static final long OFFLINE_AFTER_MS = Math.max(3000, Config.STATUS_PERIOD_MS * 4);
 
     private final List<String> nodes;
@@ -112,7 +88,7 @@ public class DashboardModel implements Consumer<Message> {
     private long messages;
     private long beacons;
 
-    /** Clés publiques de {@code keys/}. */
+    // Clés publiques de keys/
     public DashboardModel() {
         this(Path.of(Config.KEYS_DIR));
     }
@@ -127,7 +103,7 @@ public class DashboardModel implements Consumer<Message> {
         }
     }
 
-    // ------------------------------------------------------------------ réception
+    // réception
 
     @Override
     public void accept(Message m) {
@@ -186,7 +162,7 @@ public class DashboardModel implements Consumer<Message> {
         }
     }
 
-    /** Balise d'état : mémorise l'état réel du nœud et recale la reconstitution de la pompe dessus. */
+    // Balise d'état : mémorise l'état réel du nœud et recale la reconstitution de la pompe dessus
     private void onBeacon(Message m) {
         PumpCounters c = counters.get(m.getFrom());
         if (c == null) {
@@ -209,12 +185,7 @@ public class DashboardModel implements Consumer<Message> {
         rebase(c, st);
     }
 
-    /**
-     * Recale les compteurs Ricart-Agrawala sur l'état annoncé par le nœud. Sans cela, un dashboard lancé en retard
-     * (qui a raté des REQUEST ou des PUMP_RELEASED) resterait décalé d'un cran pour toujours. Les compteurs sont remis dans
-     * un état cohérent avec l'état réel ; les messages suivants les font ensuite évoluer en direct, et la balise
-     * suivante corrige tout écart transitoire (messages arrivés par des topics différents).
-     */
+    // Recale les compteurs Ricart-Agrawala sur l'état annoncé par le nœud
     private void rebase(PumpCounters c, NodeStatus st) {
         int peers = Math.max(1, nodes.size() - 1);
         long cycles = c.releases;                                // cycles complets déjà derrière nous
@@ -242,7 +213,7 @@ public class DashboardModel implements Consumer<Message> {
         }
     }
 
-    /** État Ricart-Agrawala reconstitué (voir la documentation de la classe). */
+    // État Ricart-Agrawala reconstitué (voir la documentation de la classe)
     private String pumpState(PumpCounters c) {
         if (c.requests <= c.releases) {
             return "RELEASED";
@@ -250,9 +221,9 @@ public class DashboardModel implements Consumer<Message> {
         return c.repliesReceived >= c.requests * (nodes.size() - 1) ? "HELD" : "WANTED";
     }
 
-    // ------------------------------------------------------------------ lecture
+    // lecture
 
-    /** Copie immuable et cohérente de tout ce qu'il faut afficher. */
+    // Copie immuable et cohérente de tout ce qu'il faut afficher
     public synchronized View view() {
         GlobalSnapshot snap = snapshot.getResult();
         List<Block> blocks = ledger.getChain();
@@ -305,11 +276,7 @@ public class DashboardModel implements Consumer<Message> {
                 replicator.getDivergences(), snap, List.copyOf(events), messages, beacons);
     }
 
-    /**
-     * Blocs refusés : ceux que ce dashboard a lui-même refusés en direct, plus ceux que les nœuds annoncent dans
-     * leurs balises (refus passés, qu'un dashboard lancé après coup n'a pas pu voir). Un même bloc refusé pour la
-     * même raison, annoncé par plusieurs nœuds ou déjà vu en direct, n'apparaît qu'une fois.
-     */
+    // Blocs refusés : ceux que ce dashboard a lui-même refusés en direct
     private List<RejectedBlock> allRejected() {
         Map<String, RejectedBlock> merged = new LinkedHashMap<>();
         for (RejectedBlock r : ledger.getRejected()) {
@@ -331,7 +298,7 @@ public class DashboardModel implements Consumer<Message> {
         return r.block().getNodeId() + "|" + r.block().getIndex() + "|" + r.block().getHash() + "|" + r.reason();
     }
 
-    /** ✓ / ✗ de la signature ; {@code null} pour le genesis (non signé). Résultat mis en cache par hash. */
+    // ✓ / ✗ de la signature ; null pour le genesis (non signé)
     private Boolean signatureOk(Block b) {
         if (b.getIndex() == 0) {
             return null;
@@ -343,9 +310,9 @@ public class DashboardModel implements Consumer<Message> {
         return ledger;
     }
 
-    // ------------------------------------------------------------------ journal
+    // journal
 
-    /** Une phrase lisible par type de message, pour le journal du dashboard. */
+    // Une phrase lisible par type de message, pour le journal du dashboard
     static String describe(Message m) {
         JsonObject p = m.getPayload();
         return switch (m.getType()) {
@@ -378,7 +345,7 @@ public class DashboardModel implements Consumer<Message> {
         return num(p, key);
     }
 
-    /** Résumé texte d'un état global, pour les logs et la capture. */
+    // Résumé texte d'un état global, pour les logs et la capture
     public static String summarize(GlobalSnapshot s) {
         if (s == null) {
             return "aucun snapshot reçu";

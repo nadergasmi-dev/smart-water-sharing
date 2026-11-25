@@ -17,21 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Scénario complet en console (Parties 6 et 8) : les 3 agriculteurs dans la même JVM, chacun avec son propre
- * client MQTT, sa pompe Ricart-Agrawala et sa copie du registre. Le nœud A déclenche un snapshot
- * Chandy-Lamport à intervalle régulier, pour alimenter le dashboard (humidité, état global).
- *
- * <p>Options :</p>
- * <ul>
- *   <li>{@code --keys=<dossier>} : clés de signature (défaut {@code target/demo-keys}, générées si absentes ;
- *       le dashboard doit être lancé avec le même dossier) ;</li>
- *   <li>{@code --period=<ms>} : durée d'un cycle d'agriculteur (défaut 800) ;</li>
- *   <li>{@code --snapshot-every=<ms>} : intervalle des snapshots (défaut 4000, 0 = aucun) ;</li>
- *   <li>{@code --triche} : après quelques secondes, C diffuse deux blocs falsifiés (quota dépassé, puis
- *       contenu modifié après signature) : les nœuds et le dashboard les refusent (règles V6 et V1).</li>
- * </ul>
- * Le scénario s'arrête quand tous les quotas sont épuisés (ou sur Entrée).
- *
+ * Scénario complet en console (Parties 6 et 8)
  * @author Houssine Ferjani (Binôme 2)
  */
 public final class ScenarioDemo {
@@ -90,7 +76,7 @@ public final class ScenarioDemo {
         for (FarmerNode f : farmers) f.stop();
     }
 
-    /** Thread « stdin » : se termine quand l'utilisateur appuie sur Entrée (lecture bloquante). */
+    // Thread « stdin » : se termine quand l'utilisateur appuie sur Entrée (lecture bloquante)
     private static class WaitForEnter extends Thread {
         WaitForEnter() {
             setName("stdin");
@@ -109,10 +95,7 @@ public final class ScenarioDemo {
         return farmers.stream().allMatch(f -> f.state().getQuotaRemaining() == 0);
     }
 
-    /**
-     * Le nœud C triche : il diffuse sur son propre topic deux blocs qui ne respectent pas les règles.
-     * (Il signe avec sa vraie clé : la signature est valide, ce sont les règles métier qui le trahissent.)
-     */
+    // Le nœud C triche : il diffuse sur son propre topic deux blocs qui ne respectent pas les règles
     public static void cheat(FarmerNode c, Path keys) {
         Blockchain ledger = c.runtime().ledger();
         Block last = ledger.getLastBlock();
