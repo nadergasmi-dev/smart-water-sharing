@@ -58,12 +58,7 @@ public final class ScenarioDemo {
         for (FarmerNode f : farmers) f.startLoop(period);
         System.out.println("=== scénario lancé (clés : " + keys.toAbsolutePath() + ") : Entrée pour arrêter ===");
 
-        Thread stdin = new Thread(() -> {
-            try {
-                System.in.read();
-            } catch (Exception ignored) { }
-        }, "stdin");
-        stdin.setDaemon(true);
+        WaitForEnter stdin = new WaitForEnter();
         stdin.start();
 
         long start = System.currentTimeMillis();
@@ -93,6 +88,21 @@ public final class ScenarioDemo {
             System.out.println(f);
         }
         for (FarmerNode f : farmers) f.stop();
+    }
+
+    /** Thread « stdin » : se termine quand l'utilisateur appuie sur Entrée (lecture bloquante). */
+    private static class WaitForEnter extends Thread {
+        WaitForEnter() {
+            setName("stdin");
+            setDaemon(true);
+        }
+
+        @Override
+        public void run() {
+            try {
+                System.in.read();
+            } catch (Exception ignored) { }
+        }
     }
 
     private static boolean allExhausted(List<FarmerNode> farmers) {

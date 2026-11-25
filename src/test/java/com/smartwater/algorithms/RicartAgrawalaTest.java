@@ -165,8 +165,8 @@ class RicartAgrawalaTest {
         assertEquals(List.of("REQUEST->ALL"), s.summary(), "aucune réponse tant que la pompe est tenue");
 
         ra.releasePump();
-        // contrat : RELEASE d'abord, puis les REPLY différés (dans l'ordre d'arrivée)
-        assertEquals(List.of("REQUEST->ALL", "RELEASE->ALL", "REPLY->C", "REPLY->A"), s.summary());
+        // cours : pas de RELEASE, seulement les REPLY différés (dans l'ordre d'arrivée) → 2(N − 1) messages
+        assertEquals(List.of("REQUEST->ALL", "REPLY->C", "REPLY->A"), s.summary());
         assertEquals(RicartAgrawala.State.RELEASED, ra.getState());
         assertTrue(ra.getDeferredReplies().isEmpty());
         assertEquals(-1, ra.getRequestTimestamp());
@@ -220,11 +220,10 @@ class RicartAgrawalaTest {
 
         ra.onMessage(incoming(MessageType.REPLY, "B", "A", 2));       // REPLY sans demande en cours
         ra.onMessage(incoming(MessageType.REQUEST, "Z", "ALL", 1));   // nœud inconnu
-        ra.onMessage(incoming(MessageType.RELEASE, "C", "ALL", 3));   // simple notification
+        ra.onMessage(incoming(MessageType.PUMP_RELEASED, "C", "ALL", 3));   // supervision : pas pour RA
 
         assertTrue(s.summary().isEmpty());
         assertEquals(RicartAgrawala.State.RELEASED, ra.getState());
-        assertEquals("C", ra.getLastReleasedBy());
     }
 
     /**

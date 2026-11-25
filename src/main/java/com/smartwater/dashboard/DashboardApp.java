@@ -134,14 +134,8 @@ public class DashboardApp extends Application {
         mqtt = new DashboardMqttClient(opts.getOrDefault("broker", Config.BROKER_URL), passwordOrNull(),
                 model::accept);
         mqtt.setStatusListener(s -> Platform.runLater(() -> status.setText(s)));
-        Thread connector = new Thread(() -> {
-            try {
-                mqtt.connect();
-            } catch (Exception e) {
-                Platform.runLater(() -> status.setText("connexion au broker impossible : " + e.getMessage()));
-            }
-        }, "dashboard-connect");
-        connector.setDaemon(true);
+        // La connexion est bloquante : elle se fait sur un thread à part pour garder la fenêtre réactive
+        Connector connector = new Connector();
         connector.start();
 
         refresh = new Timeline(new KeyFrame(Duration.millis(400), e -> update()));
@@ -159,6 +153,23 @@ public class DashboardApp extends Application {
                 Platform.exit();
             }));
             shot.play();
+        }
+    }
+
+    /** Thread « dashboard-connect » : connexion (bloquante) au broker, hors du thread de l'interface. */
+    private class Connector extends Thread {
+        Connector() {
+            setName("dashboard-connect");
+            setDaemon(true);
+        }
+
+        @Override
+        public void run() {
+            try {
+                mqtt.connect();
+            } catch (Exception e) {
+                Platform.runLater(() -> status.setText("connexion au broker impossible : " + e.getMessage()));
+            }
         }
     }
 

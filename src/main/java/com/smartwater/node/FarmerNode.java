@@ -143,12 +143,22 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
         rt.stop();
     }
 
-    /** Lance un cycle toutes les {@code periodMs} ms sur un thread dédié. */
-    public synchronized void startLoop(long periodMs) {
-        if (loop != null) {
-            throw new IllegalStateException("boucle déjà lancée");
+    /**
+     * Thread de l'agriculteur (cours, ch. 4 : une classe qui hérite de {@link Thread} et redéfinit
+     * {@code run()}) : un cycle toutes les {@code periodMs} ms.
+     */
+    private class FarmerLoop extends Thread {
+
+        private final long periodMs;
+
+        FarmerLoop(long periodMs) {
+            this.periodMs = periodMs;
+            setName("farmer-" + nodeId);
+            setDaemon(true);
         }
-        Thread t = new Thread(() -> {
+
+        @Override
+        public void run() {
             try {
                 // Arrêt normal : stopLoop() remet « loop » à null, le cycle en cours se termine proprement
                 // (pas d'interruption au milieu d'une section critique ou d'un envoi MQTT).
@@ -162,10 +172,17 @@ public class FarmerNode implements LocalStateProvider, MessageListener {
                 // ex. requestPump() interrompu : la demande a été abandonnée proprement par Ricart-Agrawala
                 log("boucle arrêtée : " + e.getMessage());
             }
-        }, "farmer-" + nodeId);
-        t.setDaemon(true);
+        }
+    }
+
+    /** Lance un cycle toutes les {@code periodMs} ms sur un thread dédié. */
+    public synchronized void startLoop(long periodMs) {
+        if (loop != null) {
+            throw new IllegalStateException("boucle déjà lancée");
+        }
+        FarmerLoop t = new FarmerLoop(periodMs);
         loop = t;
-        t.start();
+        t.start();                       // start() crée le thread puis appelle run() (jamais run() directement)
     }
 
     /**

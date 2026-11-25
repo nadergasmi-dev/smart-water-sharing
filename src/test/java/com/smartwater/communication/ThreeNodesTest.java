@@ -110,7 +110,7 @@ class ThreeNodesTest {
 
     @Test
     void lamportClocksStayConsistent() throws Exception {
-        int ts = a.mqtt.publish(new Message(MessageType.RELEASE, Message.ALL, null));
+        int ts = a.mqtt.publish(new Message(MessageType.PUMP_RELEASED, Message.ALL, null));
         Thread.sleep(1000);
 
         assertTrue(b.clock.get() > ts);

@@ -2,10 +2,15 @@ package com.smartwater.communication;
 
 /** Les 10 types de messages (contrat, section 4). */
 public enum MessageType {
-    // Accès à la pompe (Ricart-Agrawala)
+    // Accès à la pompe (Ricart-Agrawala : 2(N − 1) messages par entrée, pas de RELEASE)
     REQUEST,
     REPLY,
-    RELEASE,
+    /**
+     * Supervision, HORS algorithme : « je sors de la section critique », diffusé par la séquence d'irrigation
+     * juste avant les REPLY différés, pour que le dashboard sache quand la pompe est libérée. Ricart-Agrawala
+     * ne l'envoie pas et ne le lit pas. Comme NODE_STATUS, jamais enregistré en transit par Chandy-Lamport.
+     */
+    PUMP_RELEASED,
     // Snapshot (Chandy-Lamport)
     MARKER,
     /** Instantané local d'un nœud, diffusé quand il est terminé (pour construire l'état global). */

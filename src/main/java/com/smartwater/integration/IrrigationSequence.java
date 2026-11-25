@@ -26,8 +26,13 @@ import java.util.Objects;
  *   <li>{@code releasePump()} : <b>toujours</b>, même en cas de refus ou d'erreur.</li>
  * </ol>
  *
- * Le bloc est diffusé AVANT le RELEASE et les REPLY différés : le nœud suivant reçoit donc le bloc avant
- * l'autorisation d'entrer (même topic d'expéditeur, ordre FIFO), et crée son propre bloc sur une chaîne à jour.
+ * Le bloc est diffusé AVANT les REPLY différés : le nœud suivant reçoit donc le bloc avant l'autorisation
+ * d'entrer (même topic d'expéditeur, ordre FIFO), et crée son propre bloc sur une chaîne à jour.
+ *
+ * <p>Juste avant {@code releasePump()}, la séquence diffuse {@code PUMP_RELEASED} : un message de
+ * <b>supervision</b> pour le dashboard, qui ne fait pas partie de Ricart-Agrawala (2(N − 1) messages, sans
+ * RELEASE). Les deux se font sous le verrou du client MQTT : l'annonce part avant les REPLY différés, donc le
+ * dashboard ne voit jamais deux nœuds tenir la pompe en même temps.</p>
  */
 public final class IrrigationSequence {
 
@@ -118,7 +123,23 @@ public final class IrrigationSequence {
                     + block.getQuotaRemaining() + " L)");
             return new Result(Outcome.IRRIGATED, liters, block, null);
         } finally {
-            pump.releasePump();                                           // toujours
+            releaseAndAnnounce();                                         // toujours
+        }
+    }
+
+    /**
+     * Annonce la sortie au dashboard ({@code PUMP_RELEASED}, supervision) puis libère la pompe (REPLY différés),
+     * d'un seul bloc sous le verrou du client MQTT. Ordre des verrous respecté : {@code sender} puis Ricart-Agrawala.
+     * Si l'annonce échoue, la pompe est quand même libérée : personne ne doit rester bloqué.
+     */
+    private void releaseAndAnnounce() {
+        synchronized (sender) {
+            try {
+                sender.publish(new Message(MessageType.PUMP_RELEASED, Message.ALL, null));
+            } catch (RuntimeException e) {
+                log("annonce PUMP_RELEASED non envoyée (" + e.getMessage() + ") : la pompe est libérée quand même");
+            }
+            pump.releasePump();
         }
     }
 

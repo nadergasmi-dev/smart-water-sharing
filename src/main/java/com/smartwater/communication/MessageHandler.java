@@ -76,7 +76,8 @@ public class MessageHandler implements Consumer<Message> {
         if (l == null) {
             boolean handledBySnapshot = s != null
                     && (m.getType() == MessageType.MARKER || m.getType() == MessageType.SNAPSHOT_STATE);
-            if (!handledBySnapshot) {
+            boolean supervision = m.getType() == MessageType.PUMP_RELEASED;   // pour le dashboard seulement
+            if (!handledBySnapshot && !supervision) {
                 System.out.println("[" + nodeId + "] aucun module pour " + m.getType() + " (ignoré)");
             }
             return;

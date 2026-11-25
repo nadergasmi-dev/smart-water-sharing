@@ -129,7 +129,8 @@ public class ChandyLamport implements SnapshotService {
             onMarker(m);
         } else if (m.getType() == MessageType.SNAPSHOT_STATE) {
             onSnapshotState(m);
-        } else if (m.getType() != MessageType.NODE_STATUS && recording.contains(m.getFrom())) {
+        } else if (m.getType() != MessageType.NODE_STATUS && m.getType() != MessageType.PUMP_RELEASED
+                && recording.contains(m.getFrom())) {                // supervision : jamais en transit
             // reçu après mon enregistrement et avant le MARKER de cet expéditeur : en transit
             channels.get(m.getFrom()).add(m);
         }

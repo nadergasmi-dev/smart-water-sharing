@@ -69,7 +69,7 @@ class IrrigationSequenceTest {
 
         assertEquals(IrrigationSequence.Outcome.IRRIGATED, r.outcome());
         assertEquals(List.of("requestPump", "compteurs", "publish IRRIGATION_EVENT", "publish LEDGER_UPDATE",
-                "releasePump"), trace);
+                "publish PUMP_RELEASED", "releasePump"), trace);
         assertEquals(160, counters.quota);
         assertEquals(2, ledger.getChain().size());
 
@@ -95,7 +95,7 @@ class IrrigationSequenceTest {
 
         assertEquals(IrrigationSequence.Outcome.NOTHING_ALLOCATED, r.outcome());
         assertTrue(counters.nothing);
-        assertEquals(List.of("requestPump", "releasePump"), trace);
+        assertEquals(List.of("requestPump", "publish PUMP_RELEASED", "releasePump"), trace);
         assertEquals(1, ledger.getChain().size());
     }
 
@@ -109,7 +109,8 @@ class IrrigationSequenceTest {
         assertTrue(r.reason().startsWith("V6 : "), r.reason());
         assertEquals(r.reason(), counters.refused);
         assertEquals(200, counters.quota, "compteurs inchangés");
-        assertEquals(List.of("requestPump", "releasePump"), trace, "aucun événement diffusé");
+        assertEquals(List.of("requestPump", "publish PUMP_RELEASED", "releasePump"), trace,
+                "aucun événement diffusé (seulement l'annonce de supervision)");
         assertEquals(1, ledger.getRejected().size(), "le refus est visible par le dashboard");
     }
 
@@ -142,7 +143,7 @@ class IrrigationSequenceTest {
         assertThrows(IllegalStateException.class, () -> sequence.irrigate((quota, reservoir) -> {
             throw new IllegalStateException("bug dans l'allocation");
         }, new Counters()));
-        assertEquals(List.of("requestPump", "releasePump"), trace);
+        assertEquals(List.of("requestPump", "publish PUMP_RELEASED", "releasePump"), trace);
     }
 
     @Test

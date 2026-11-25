@@ -28,8 +28,8 @@ import java.util.Set;
  *   <li>état {@code WANTED} (attend la pompe) : diffère si sa propre demande est prioritaire, sinon répond.</li>
  * </ul>
  * <p>La priorité est l'ordre total {@code (lamport, from)} de {@link LamportClock#compare}. À la sortie
- * ({@link #releasePump()}), le nœud diffuse {@code RELEASE} (simple notification, pour le dashboard) puis
- * envoie tous les {@code REPLY} différés. Coût : 2(N − 1) messages par entrée, plus le {@code RELEASE}.</p>
+ * ({@link #releasePump()}), le nœud envoie tous les {@code REPLY} différés. Comme dans le cours, il n'y a
+ * <b>pas de RELEASE</b> : coût 2(N − 1) messages par entrée ((N − 1) REQUEST + (N − 1) REPLY).</p>
  *
  * <p><b>Propriétés.</b> Sûreté : deux nœuds ne peuvent pas tenir la pompe en même temps, car entre deux
  * demandes concurrentes, celle qui est la moins prioritaire répond et l'autre diffère. Vivacité (pas
@@ -48,7 +48,7 @@ import java.util.Set;
  * <p><b>Branchement</b> (dans {@code FarmerNode}) :</p>
  * <pre>
  * RicartAgrawala ra = new RicartAgrawala("A", rt.clock(), rt.sender());
- * rt.handler().register(ra, MessageType.REQUEST, MessageType.REPLY, MessageType.RELEASE);
+ * rt.handler().register(ra, MessageType.REQUEST, MessageType.REPLY);
  * </pre>
  *
  * @author Houssine Ferjani (Binôme 2)
@@ -59,7 +59,7 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
     public enum State { RELEASED, WANTED, HELD }
 
     /** Types de messages à enregistrer auprès du {@code MessageHandler}. */
-    public static final MessageType[] TYPES = { MessageType.REQUEST, MessageType.REPLY, MessageType.RELEASE };
+    public static final MessageType[] TYPES = { MessageType.REQUEST, MessageType.REPLY };
 
     private final String nodeId;
     private final LamportClock clock;
@@ -84,7 +84,6 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
 
     // ---- statistiques (pour les tests et le dashboard) ----
     private long entries = 0;
-    private String lastReleasedBy = null;
 
     /** Constructeur du contrat (section 7) : les autres nœuds sont ceux de {@link Config#NODE_IDS}. */
     public RicartAgrawala(String nodeId, LamportClock clock, MessageSender sender) {
@@ -144,7 +143,7 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
     }
 
     /**
-     * Sortie de section critique : diffuse {@code RELEASE}, puis envoie les {@code REPLY} différés.
+     * Sortie de section critique : envoie les {@code REPLY} différés (pas de RELEASE dans Ricart-Agrawala).
      *
      * @throws IllegalStateException si la pompe n'est pas tenue par ce nœud
      */
@@ -157,13 +156,12 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
                 }
                 state = State.RELEASED;
                 requestTs = -1;
-                sender.publish(new Message(MessageType.RELEASE, Message.ALL, null));
                 List<String> toReply = new ArrayList<>(deferred);
                 deferred.clear();
                 for (String peer : toReply) {
                     sender.publish(new Message(MessageType.REPLY, peer, null));
                 }
-                log("SORTIE de section critique, RELEASE diffusé, REPLY différés envoyés à " + toReply);
+                log("SORTIE de section critique, REPLY différés envoyés à " + toReply);
             }
         }
     }
@@ -184,7 +182,6 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
         switch (m.getType()) {
             case REQUEST -> onRequest(m);
             case REPLY -> onReply(m.getFrom());
-            case RELEASE -> onRelease(m.getFrom());
             default -> { /* pas pour ce module */ }
         }
     }
@@ -223,10 +220,6 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
         } else {
             log("REPLY inattendu de " + from + " (état " + state + ") ignoré");
         }
-    }
-
-    private synchronized void onRelease(String from) {
-        lastReleasedBy = from;   // notification seulement : ce sont les REPLY qui autorisent l'entrée
     }
 
     /** Abandon d'une demande en cours (interruption) : on revient à RELEASED sans laisser personne bloqué. */
@@ -276,8 +269,6 @@ public class RicartAgrawala implements PumpAccess, MessageListener {
     public synchronized List<String> getAwaitingReplies() { return List.copyOf(awaitingReply); }
     /** Nombre d'entrées en section critique depuis le démarrage. */
     public synchronized long getEntries()        { return entries; }
-    /** Dernier nœud qui a annoncé RELEASE (pour l'affichage « pompe libre »), ou null. */
-    public synchronized String getLastReleasedBy() { return lastReleasedBy; }
 
     private void log(String text) {
         System.out.println("[" + nodeId + "] RA (H=" + clock.get() + ") : " + text);

@@ -38,7 +38,8 @@ import java.util.function.Consumer;
  * <ul>
  *   <li><b>Pompe (Ricart-Agrawala)</b> : l'état de chaque nœud est <i>reconstitué</i> à partir des messages
  *       observés. Après sa k-ième demande, un nœud est {@code WANTED} ; il passe {@code HELD} quand il a reçu
- *       k × (N − 1) {@code REPLY} au total ; il revient à {@code RELEASED} avec son k-ième {@code RELEASE}.
+ *       k × (N − 1) {@code REPLY} au total ; il revient à {@code RELEASED} avec son k-ième {@code PUMP_RELEASED}
+ *       (annonce de supervision envoyée par la séquence d'irrigation : Ricart-Agrawala lui-même n'a pas de RELEASE).
  *       Compter les totaux (plutôt que suivre une suite d'événements) rend le calcul insensible à l'ordre
  *       d'arrivée entre topics différents : un {@code REPLY} de B à A peut arriver au dashboard avant le
  *       {@code REQUEST} de A, puisqu'ils passent par deux topics distincts.</li>
@@ -156,7 +157,7 @@ public class DashboardModel implements Consumer<Message> {
                         c.requestsSinceBeacon++;
                         c.lastRequestLamport = m.getLamport();
                     }
-                    case RELEASE -> {
+                    case PUMP_RELEASED -> {
                         c.releases++;
                         c.releasesSinceBeacon++;
                     }
@@ -210,7 +211,7 @@ public class DashboardModel implements Consumer<Message> {
 
     /**
      * Recale les compteurs Ricart-Agrawala sur l'état annoncé par le nœud. Sans cela, un dashboard lancé en retard
-     * (qui a raté des REQUEST ou des RELEASE) resterait décalé d'un cran pour toujours. Les compteurs sont remis dans
+     * (qui a raté des REQUEST ou des PUMP_RELEASED) resterait décalé d'un cran pour toujours. Les compteurs sont remis dans
      * un état cohérent avec l'état réel ; les messages suivants les font ensuite évoluer en direct, et la balise
      * suivante corrige tout écart transitoire (messages arrivés par des topics différents).
      */
@@ -280,7 +281,7 @@ public class DashboardModel implements Consumer<Message> {
             }
             if (c.status != null) {                              // la balise est plus récente et fait foi
                 humidity = c.status.local().humidity();
-                // valeur annoncée + ce qui s'est passé depuis (chaque cycle complet se termine par un RELEASE)
+                // valeur annoncée + ce qui s'est passé depuis (chaque cycle complet se termine par un PUMP_RELEASED)
                 requests = c.status.stat("requests", requests) + c.requestsSinceBeacon;
                 entries = c.status.stat("entries", entries) + c.releasesSinceBeacon;
             }
@@ -350,7 +351,7 @@ public class DashboardModel implements Consumer<Message> {
         return switch (m.getType()) {
             case REQUEST -> "demande la pompe (H=" + m.getLamport() + ")";
             case REPLY -> "autorise " + m.getTo() + " à prendre la pompe";
-            case RELEASE -> "libère la pompe";
+            case PUMP_RELEASED -> "libère la pompe";
             case IRRIGATION_EVENT -> "irrigue " + num(p, "liters") + " L (quota restant " + num(p, "quotaRemaining")
                     + " L, réservoir " + num(p, "reservoirLevel") + " L)";
             case LEDGER_UPDATE -> {

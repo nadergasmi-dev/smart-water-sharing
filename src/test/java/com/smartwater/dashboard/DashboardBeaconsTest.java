@@ -119,7 +119,7 @@ class DashboardBeaconsTest {
     @Test
     void etatDeLaPompeRecaleSurLaBaliseAuLieuDeCompterDepuisLeDebut() {
         // Le dashboard a raté 2 cycles complets de A : sans balise il resterait décalé. Il n'a vu que :
-        model.accept(msg(MessageType.RELEASE, "A", Message.ALL, null));       // fin d'un cycle commencé avant lui
+        model.accept(msg(MessageType.PUMP_RELEASED, "A", Message.ALL, null));       // fin d'un cycle commencé avant lui
         model.accept(msg(MessageType.REQUEST, "A", Message.ALL, null));       // nouvelle demande
         assertEquals("RELEASED", farmer("A").pumpState(), "comptage décalé d'un cran : faux (A est en réalité WANTED)");
 
@@ -132,7 +132,7 @@ class DashboardBeaconsTest {
         model.accept(msg(MessageType.REPLY, "B", "A", null));
         assertEquals("HELD", farmer("A").pumpState());
         assertEquals(List.of("A"), model.view().holders());
-        model.accept(msg(MessageType.RELEASE, "A", Message.ALL, null));
+        model.accept(msg(MessageType.PUMP_RELEASED, "A", Message.ALL, null));
         assertEquals("RELEASED", farmer("A").pumpState());
     }
 
@@ -143,7 +143,7 @@ class DashboardBeaconsTest {
         model.accept(msg(MessageType.REQUEST, "A", Message.ALL, null));       // arrivé après la balise
         model.accept(msg(MessageType.REPLY, "B", "A", null));
         model.accept(msg(MessageType.REPLY, "C", "A", null));
-        model.accept(msg(MessageType.RELEASE, "A", Message.ALL, null));
+        model.accept(msg(MessageType.PUMP_RELEASED, "A", Message.ALL, null));
         assertEquals(5, farmer("A").requests(), "la balise a jusqu'à 1 s de retard : on ajoute ce qui s'est passé depuis");
         assertEquals(5, farmer("A").entries());
     }

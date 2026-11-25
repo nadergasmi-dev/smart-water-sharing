@@ -32,7 +32,7 @@ import java.util.function.Supplier;
  * // dans FarmerNode (Binôme 2)
  * NodeRuntime rt = new NodeRuntime("A", this);                 // this = LocalStateProvider
  * RicartAgrawala ra = new RicartAgrawala("A", rt.clock(), rt.sender());
- * rt.handler().register(ra, MessageType.REQUEST, MessageType.REPLY, MessageType.RELEASE);
+ * rt.handler().register(ra, MessageType.REQUEST, MessageType.REPLY);
  * rt.start();                                                   // connexion + rattrapage du registre
  * IrrigationSequence seq = rt.irrigationSequence(ra);
  * seq.irrigate((quota, reservoir) -> Math.min(besoin, Math.min(quota, reservoir)), listener);

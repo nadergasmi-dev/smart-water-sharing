@@ -78,7 +78,7 @@ class DashboardModelTest {
         model.accept(msg(MessageType.REPLY, "C", "B", 8, null));
         assertEquals("WANTED", farmer("B").pumpState(), "il manque encore le REPLY de A");
 
-        model.accept(msg(MessageType.RELEASE, "A", Message.ALL, 9, null));
+        model.accept(msg(MessageType.PUMP_RELEASED, "A", Message.ALL, 9, null));
         model.accept(msg(MessageType.REPLY, "A", "B", 10, null));    // REPLY différé
         assertEquals("RELEASED", farmer("A").pumpState());
         assertEquals("HELD", farmer("B").pumpState());
